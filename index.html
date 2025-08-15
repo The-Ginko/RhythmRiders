@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rhythm Riders - Physics Demo</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0c0c1e;
+            color: #e0e0e0;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        canvas {
+            display: block;
+            background-color: #1a1a2e;
+        }
+        .controls {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px 25px;
+            border-radius: 10px;
+            border: 1px solid #ff00ff;
+            box-shadow: 0 0 15px #ff00ff;
+            text-align: center;
+        }
+        .controls h1 {
+            margin: 0 0 10px 0;
+            color: #00ffff;
+            font-size: 1.5em;
+        }
+        .controls p {
+            margin: 5px;
+            font-size: 1em;
+        }
+        .controls span {
+            display: inline-block;
+            background: #333;
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <h1>Rhythm Riders - Physics Demo</h1>
+        <p><span>W</span> / <span>Up</span> - Accelerate | <span>S</span> / <span>Down</span> - Brake/Reverse</p>
+        <p><span>A</span> / <span>Left</span> - Lean Back | <span>D</span> / <span>Right</span> - Lean Forward</p>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.0/pixi.min.js"></script>
+    <script>
+        // --- Setup ---
+        const {
+            Engine, Render, Runner, World, Bodies, Body, Composite, Constraint, Vector, Events
+        } = Matter;
+
+        // --- PIXI Setup ---
+        const app = new PIXI.Application({
+            width: window.innerWidth,
+            height: window.innerHeight,
+            backgroundColor: 0x1a1a2e,
+            resizeTo: window,
+            antialias: true,
+        });
+        document.body.appendChild(app.view);
+
+        // --- Matter.js Engine Setup ---
+        const engine = Engine.create();
+        const world = engine.world;
+        engine.gravity.y = 1;
+
+        // This object will hold PIXI.Graphics for each Matter body
+        const graphicsMap = new Map();
+
+        // --- Game State & Controls ---
+        const keys = {};
+        let rider, bike;
+        let isAirborne = false;
+        const RIDER_GROUP = Body.nextGroup(true);
+
+        // --- Ground & Track Creation ---
+        function createGround() {
+            const groundSegments = [];
+            let x = -2000;
+            let y = window.innerHeight * 0.9;
+            let segmentLength = 200;
+
+            // Generate a long, varied track
+            for (let i = 0; i < 100; i++) {
+                const heightChange = (Math.random() - 0.5) * 200;
+                const nextX = x + segmentLength + Math.random() * 100;
+                const nextY = y + heightChange;
+
+                const segmentVertices = [
+                    { x: x, y: y },
+                    { x: nextX, y: nextY },
+                    { x: nextX, y: window.innerHeight + 50 },
+                    { x: x, y: window.innerHeight + 50 }
+                ];
+
+                const groundSegment = Bodies.fromVertices(
+                    (x + nextX) / 2,
+                    (y + nextY + window.innerHeight + 50) / 2,
+                    [segmentVertices], {
+                        isStatic: true,
+                        friction: 1.0,
+                        restitution: 0,
+                        render: { visible: false } // We'll render with PIXI
+                    }
+                );
+                World.add(world, groundSegment);
+                
+                // Create PIXI graphic for the segment
+                const g = new PIXI.Graphics();
+                g.beginFill(0x0c0c1e);
+                g.lineStyle(4, 0x00ffff, 1);
+                g.moveTo(x, y);
+                g.lineTo(nextX, nextY);
+                g.lineTo(nextX, window.innerHeight + 50);
+                g.lineTo(x, window.innerHeight + 50);
+                g.closePath();
+                g.endFill();
+                app.stage.addChild(g);
+                
+                x = nextX;
+                y = nextY;
+            }
+        }
+
+        // --- Rider and Bike Creation ---
+        function createRiderAndBike(x, y) {
+            // --- Bike Parts ---
+            const chassis = Bodies.rectangle(x, y, 80, 20, { 
+                collisionFilter: { group: RIDER_GROUP },
+                density: 0.01 
+            });
+            const rearWheel = Bodies.circle(x - 40, y + 20, 20, {
+                collisionFilter: { group: RIDER_GROUP },
+                friction: 0.9,
+                restitution: 0.1,
+                density: 0.01
+            });
+            const frontWheel = Bodies.circle(x + 40, y + 20, 20, {
+                collisionFilter: { group: RIDER_GROUP },
+                friction: 0.9,
+                restitution: 0.1,
+                density: 0.01
+            });
+
+            // Suspension constraints
+            const rearSuspension = Constraint.create({
+                bodyA: chassis, bodyB: rearWheel,
+                pointA: { x: -40, y: 5 },
+                stiffness: 0.1, damping: 0.1, length: 30
+            });
+             const frontSuspension = Constraint.create({
+                bodyA: chassis, bodyB: frontWheel,
+                pointA: { x: 40, y: 5 },
+                stiffness: 0.1, damping: 0.1, length: 30
+            });
+
+            bike = Composite.create({ label: 'Bike' });
+            Composite.addBody(bike, chassis);
+            Composite.addBody(bike, rearWheel);
+            Composite.addBody(bike, frontWheel);
+            Composite.addConstraint(bike, rearSuspension);
+            Composite.addConstraint(bike, frontSuspension);
+
+            // --- Rider Parts ---
+            const torso = Bodies.rectangle(x, y - 40, 20, 40, { 
+                collisionFilter: { group: RIDER_GROUP },
+                density: 0.005
+            });
+            const head = Bodies.circle(x, y - 70, 15, {
+                collisionFilter: { group: RIDER_GROUP },
+                density: 0.005
+            });
+
+            // 3-part legs
+            const upperLeg = Bodies.rectangle(x - 10, y - 20, 10, 20, { collisionFilter: { group: RIDER_GROUP } });
+            const lowerLeg = Bodies.rectangle(x - 10, y, 10, 20, { collisionFilter: { group: RIDER_GROUP } });
+            const foot = Bodies.rectangle(x - 10, y + 15, 15, 8, { collisionFilter: { group: RIDER_GROUP } });
+
+            rider = Composite.create({ label: 'Rider' });
+            Composite.addBody(rider, torso);
+            Composite.addBody(rider, head);
+            Composite.addBody(rider, upperLeg);
+            Composite.addBody(rider, lowerLeg);
+            Composite.addBody(rider, foot);
+
+            // --- Rider Joints ---
+            const neck = Constraint.create({ bodyA: torso, bodyB: head, pointA: { x: 0, y: -20 }, pointB: { x: 0, y: 10 }, stiffness: 0.8, length: 5 });
+            const hip = Constraint.create({ bodyA: torso, bodyB: upperLeg, pointA: { x: 0, y: 20 }, pointB: { x: 0, y: -10 }, stiffness: 0.8, length: 5 });
+            const knee = Constraint.create({ bodyA: upperLeg, bodyB: lowerLeg, pointA: { x: 0, y: 10 }, pointB: { x: 0, y: -10 }, stiffness: 0.8, length: 5 });
+            const ankle = Constraint.create({ bodyA: lowerLeg, bodyB: foot, pointA: { x: 0, y: 10 }, pointB: { x: 0, y: -4 }, stiffness: 0.8, length: 5 });
+            
+            Composite.addConstraint(rider, neck);
+            Composite.addConstraint(rider, hip);
+            Composite.addConstraint(rider, knee);
+            Composite.addConstraint(rider, ankle);
+
+            // --- Connect Rider to Bike ---
+            const seatConstraint = Constraint.create({
+                bodyA: chassis, bodyB: torso,
+                pointA: { x: -10, y: -10 },
+                pointB: { x: 0, y: 20 },
+                stiffness: 1,
+                damping: 0.1,
+                length: 5
+            });
+
+            // The crucial foot-to-peg constraint
+            const footPegConstraint = Constraint.create({
+                bodyA: chassis, bodyB: foot,
+                pointA: { x: 0, y: 0 },
+                pointB: { x: 0, y: 0 },
+                stiffness: 0.8,
+                length: 20
+            });
+            
+            World.add(world, [bike, rider, seatConstraint, footPegConstraint]);
+            
+            // Store references for later manipulation
+            rider.joints = { hip, knee, ankle };
+            rider.footPegConstraint = footPegConstraint;
+            bike.parts = { chassis, rearWheel, frontWheel };
+        }
+
+        // --- Leg Mechanic Logic ---
+        function updateLegMechanics() {
+            if (!rider || !bike) return;
+
+            const groundContacts = Matter.Query.collides(bike.parts.rearWheel, world.bodies).length > 0 ||
+                                   Matter.Query.collides(bike.parts.frontWheel, world.bodies).length > 0;
+
+            const currentlyAirborne = !groundContacts;
+
+            if (currentlyAirborne && !isAirborne) {
+                // Transition to Airborne
+                isAirborne = true;
+                World.remove(world, rider.footPegConstraint);
+                rider.joints.hip.stiffness = 0.01;
+                rider.joints.knee.stiffness = 0.01;
+                rider.joints.ankle.stiffness = 0.01;
+            } else if (!currentlyAirborne && isAirborne) {
+                // Transition to On-Ground
+                isAirborne = false;
+                World.add(world, rider.footPegConstraint);
+                rider.joints.hip.stiffness = 0.8;
+                rider.joints.knee.stiffness = 0.8;
+                rider.joints.ankle.stiffness = 0.8;
+            }
+        }
+        
+        // --- Player Controls ---
+        function handleControls() {
+            if (!rider || !bike) return;
+
+            const chassis = bike.parts.chassis;
+            const rearWheel = bike.parts.rearWheel;
+
+            // Acceleration / Braking
+            if (keys['w'] || keys['ArrowUp']) {
+                const force = Vector.rotate({ x: 0.015, y: 0 }, rearWheel.angle);
+                Body.applyForce(rearWheel, rearWheel.position, force);
+            }
+            if (keys['s'] || keys['ArrowDown']) {
+                 const force = Vector.rotate({ x: -0.01, y: 0 }, rearWheel.angle);
+                 Body.applyForce(rearWheel, rearWheel.position, force);
+            }
+
+            // Torque for in-air rotation
+            if (keys['a'] || keys['ArrowLeft']) {
+                chassis.torque = -0.3;
+            }
+            if (keys['d'] || keys['ArrowRight']) {
+                chassis.torque = 0.3;
+            }
+        }
+
+        // --- PIXI Rendering Logic ---
+        function createPixiGraphicForBody(body) {
+            const g = new PIXI.Graphics();
+            const color = 0xff00ff; // Neon pink
+            const lineColor = 0x00ffff; // Neon cyan
+            
+            g.beginFill(color, 0.3);
+            g.lineStyle(2, lineColor, 1);
+
+            if (body.circleRadius) {
+                g.drawCircle(0, 0, body.circleRadius);
+            } else {
+                const path = body.vertices.map(v => new PIXI.Point(v.x - body.position.x, v.y - body.position.y));
+                g.drawPolygon(path);
+            }
+            g.endFill();
+            app.stage.addChild(g);
+            graphicsMap.set(body.id, g);
+        }
+
+        function updatePixiGraphics() {
+            // Update all dynamic bodies
+            for (const body of Composite.allBodies(world)) {
+                if (body.isStatic) continue;
+
+                if (!graphicsMap.has(body.id)) {
+                    createPixiGraphicForBody(body);
+                }
+                const g = graphicsMap.get(body.id);
+                if (g) {
+                    g.position.set(body.position.x, body.position.y);
+                    g.rotation = body.angle;
+                }
+            }
+            
+            // Camera follows the bike
+            if (bike && bike.parts.chassis) {
+                const bikeX = bike.parts.chassis.position.x;
+                app.stage.pivot.x = bikeX;
+                app.stage.position.x = app.screen.width / 2;
+            }
+        }
+
+        // --- Main Game Loop ---
+        function gameLoop() {
+            handleControls();
+            Engine.update(engine);
+            updateLegMechanics();
+            updatePixiGraphics();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- Initialization ---
+        function init() {
+            createGround();
+            createRiderAndBike(200, window.innerHeight * 0.7);
+
+            // Keyboard event listeners
+            window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+            window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+            
+            // Adjust camera pivot for initial view
+            app.stage.pivot.y = window.innerHeight / 2;
+            app.stage.position.y = app.screen.height / 2;
+
+            gameLoop();
+        }
+
+        init();
+    </script>
+</body>
+</html>
