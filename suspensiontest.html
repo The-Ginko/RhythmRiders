@@ -40,14 +40,14 @@
     <script>
         // --- Setup ---
         const {
-            Engine, Render, Runner, World, Bodies, Body, Composite, Vector, Query, Constraint, Events, Mouse, MouseConstraint
+            Engine, Render, Runner, World, Bodies, Body, Composite, Vector, Constraint, Events, Mouse, MouseConstraint
         } = Matter;
-
+    
         // --- Engine Setup ---
         const engine = Engine.create();
         const world = engine.world;
         engine.gravity.y = 1;
-
+    
         // --- Matter Renderer Setup ---
         const render = Render.create({
             element: document.body,
@@ -60,77 +60,83 @@
             }
         });
         Render.run(render);
-
     
-        // --- Game State & Controls ---
+        // --- Game State, Controls, and Creation Functions ---
         const keys = {};
         let bike;
-        let isAirTuneMode = false;
-        let isPaused = false;
-
-        // --- Ground & Diagnostic Track ---
+    
+        function drawSelectedConstraintHighlight(context, constraint) {
+            const bodyA = constraint.bodyA;
+            const bodyB = constraint.bodyB;
+            if (!bodyA || !bodyB) return;
+    
+            // Correctly translate world coordinates to canvas coordinates
+            const startPoint = Vector.add(bodyA.position, constraint.pointA);
+            const endPoint = Vector.add(bodyB.position, constraint.pointB);
+            const bounds = render.bounds;
+    
+            const startCanvas = { x: (startPoint.x - bounds.min.x), y: (startPoint.y - bounds.min.y) };
+            const endCanvas = { x: (endPoint.x - bounds.min.x), y: (endPoint.y - bounds.min.y) };
+    
+            context.beginPath();
+            context.moveTo(startCanvas.x, startCanvas.y);
+            context.lineTo(endCanvas.x, endCanvas.y);
+            context.lineWidth = 5;
+            context.strokeStyle = 'rgba(255, 229, 59, 0.9)';
+            context.stroke();
+        }
+            
+        // --- Initialization ---
+        function init() {
+            // 1. Create Runner and Tools FIRST for correct initialization
+            const runner = Runner.create();
+            const gui = MatterTools.Gui.create(engine, runner);
+            const inspector = MatterTools.Inspector.create(engine, render);
+    
+            // 2. Add all world objects
+            createDiagnosticTrack();
+            bike = createBike(400, 400, MOTOCROSS_PRESET);
+    
+            // 3. Add mouse controls
+            const mouse = Mouse.create(render.canvas);
+            const mouseConstraint = MouseConstraint.create(engine, {
+                mouse: mouse,
+                constraint: { stiffness: 0.2, render: { visible: true } }
+            });
+            World.add(world, mouseConstraint);
+            render.mouse = mouse;
+    
+            // 4. Set up standard event listeners
+            window.addEventListener('keydown', (e) => { keys[e.key] = true; });
+            window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+            Events.on(runner, 'beforeUpdate', handleControls);
+            
+            // --- THE CORRECTED RENDER LOOP ---
+            Events.on(render, 'afterRender', function() {
+                // Check if there is anything selected in the inspector
+                if (inspector.selected.length > 0) {
+                    // Get the actual Matter.js object from the .data property
+                    const selection = inspector.selected[0].data;
+    
+                    // Check if the selection is a constraint before drawing
+                    if (selection && selection.type === 'constraint') {
+                        drawSelectedConstraintHighlight(render.context, selection);
+                    }
+                }
+            });
+            
+            // 5. Run the engine
+            Runner.run(runner, engine);
+        }
+    
+        // --- (Full function definitions for bike, track, and controls) ---
         function createDiagnosticTrack() {
-            const groundParts = [];
-            groundParts.push(Bodies.rectangle(400, 600, 800, 50, { isStatic: true }));
-            groundParts.push(Bodies.rectangle(1200, 500, 800, 50, { isStatic: true, angle: -Math.PI / 8 }));
-            groundParts.push(Bodies.rectangle(1900, 420, 600, 50, { isStatic: true }));
-            groundParts.push(Bodies.rectangle(2500, 500, 400, 20, { isStatic: true, angle: Math.PI / 10 }));
-            groundParts.push(Bodies.rectangle(3000, 500, 400, 20, { isStatic: true, angle: -Math.PI / 10 }));
-            World.add(world, groundParts);
+            World.add(world, [
+                Bodies.rectangle(400, 600, 800, 50, { isStatic: true }),
+                Bodies.rectangle(1200, 500, 800, 50, { isStatic: true, angle: -Math.PI / 8 }),
+                Bodies.rectangle(1900, 420, 600, 50, { isStatic: true })
+            ]);
         }
-
-        // --- Bike Factory ---
-        function createBike(x, y, preset) {
-            const group = Body.nextGroup(true);
-            
-            const chassis = Bodies.rectangle(x, y, preset.chassis.width, preset.chassis.height, {
-                collisionFilter: { group: group },
-                density: preset.chassis.density
-            });
-
-            const rearWheel = Bodies.circle(x + preset.rearWheel.offsetX, y + preset.rearWheel.offsetY, preset.rearWheel.radius, {
-                collisionFilter: { group: group },
-                friction: preset.rearWheel.friction,
-                density: preset.rearWheel.density
-            });
-            const frontWheel = Bodies.circle(x + preset.frontWheel.offsetX, y + preset.frontWheel.offsetY, preset.frontWheel.radius, {
-                collisionFilter: { group: group },
-                friction: preset.frontWheel.friction,
-                density: preset.frontWheel.density
-            });
-
-            const rearSuspension = Constraint.create({
-                label: 'Rear Suspension',
-                bodyA: chassis,
-                pointA: { x: preset.rearWheel.offsetX, y: 0 },
-                bodyB: rearWheel,
-                stiffness: preset.rearSuspension.stiffness,
-                damping: preset.rearSuspension.damping,
-                length: preset.rearSuspension.length
-            });
-            const frontSuspension = Constraint.create({
-                label: 'Front Suspension',
-                bodyA: chassis,
-                pointA: { x: preset.frontWheel.offsetX, y: 0 },
-                bodyB: frontWheel,
-                stiffness: preset.frontSuspension.stiffness,
-                damping: preset.frontSuspension.damping,
-                length: preset.frontSuspension.length
-            });
-
-            const bikeComposite = Composite.create({ label: 'Motorcycle' });
-            Composite.addBody(bikeComposite, chassis);
-            Composite.addBody(bikeComposite, rearWheel);
-            Composite.addBody(bikeComposite, frontWheel);
-            Composite.addConstraint(bikeComposite, rearSuspension);
-            Composite.addConstraint(bikeComposite, frontSuspension);
-
-            World.add(world, bikeComposite);
-            
-            return bikeComposite;
-        }
-
-        // --- Bike Presets ---
         const MOTOCROSS_PRESET = {
             chassis: { width: 100, height: 20, density: 0.02 },
             rearWheel: { offsetX: -50, offsetY: 30, radius: 25, friction: 0.9, density: 0.015 },
@@ -138,142 +144,33 @@
             rearSuspension: { stiffness: 0.01, damping: 0.05, length: 60 },
             frontSuspension: { stiffness: 0.01, damping: 0.05, length: 60 }
         };
-
-        // --- Controls ---
+        function createBike(x, y, preset) {
+            const bikeComposite = Composite.create({ label: 'Motorcycle' });
+            const group = Body.nextGroup(true);
+            const chassis = Bodies.rectangle(x, y, preset.chassis.width, preset.chassis.height, { collisionFilter: { group: group }, density: preset.chassis.density });
+            const rearWheel = Bodies.circle(x + preset.rearWheel.offsetX, y + preset.rearWheel.offsetY, preset.rearWheel.radius, { collisionFilter: { group: group }, friction: preset.rearWheel.friction, density: preset.rearWheel.density });
+            const frontWheel = Bodies.circle(x + preset.frontWheel.offsetX, y + preset.frontWheel.offsetY, preset.frontWheel.radius, { collisionFilter: { group: group }, friction: preset.frontWheel.friction, density: preset.frontWheel.density });
+            const rearSuspension = Constraint.create({
+                label: 'Rear Suspension', bodyA: chassis, pointA: { x: preset.rearWheel.offsetX, y: 0 }, bodyB: rearWheel, stiffness: preset.rearSuspension.stiffness, damping: preset.rearSuspension.damping, length: preset.rearSuspension.length
+            });
+            const frontSuspension = Constraint.create({
+                label: 'Front Suspension', bodyA: chassis, pointA: { x: preset.frontWheel.offsetX, y: 0 }, bodyB: frontWheel, stiffness: preset.frontSuspension.stiffness, damping: preset.frontSuspension.damping, length: preset.frontSuspension.length
+            });
+            Composite.add(bikeComposite, [chassis, rearWheel, frontWheel, rearSuspension, frontSuspension]);
+            World.add(world, bikeComposite);
+            return bikeComposite;
+        }
         function handleControls() {
             if (!bike) return;
             const rearWheel = bike.bodies[1];
             const chassis = bike.bodies[0];
-
-            if (keys['w'] || keys['ArrowUp']) {
-                rearWheel.torque = 0.5;
-            }
-            if (keys['s'] || keys['ArrowDown']) {
-                rearWheel.torque = -0.2;
-            }
-            if (keys['a'] || keys['ArrowLeft']) {
-                chassis.torque = -0.5;
-            }
-            if (keys['d'] || keys['ArrowRight']) {
-                chassis.torque = 0.5;
-            }
+            if (keys['w'] || keys['ArrowUp']) { rearWheel.torque = 0.5; }
+            if (keys['s'] || keys['ArrowDown']) { rearWheel.torque = -0.2; }
+            if (keys['a'] || keys['ArrowLeft']) { chassis.torque = -0.5; }
+            if (keys['d'] || keys['ArrowRight']) { chassis.torque = 0.5; }
         }
-        
-        // --- Game Loop ---
-        function updateGameLogic() {
-            if (isPaused) return;
-            handleControls();
-        }
-
-        // --- Draw Grid on Canvas ---
-        function drawGrid(context) {
-            if (!bike || !bike.bodies || bike.bodies.length === 0) {
-                return; // Don't draw grid if bike or its bodies are not ready
-            }
-            const gridSpacing = 100; // Draw lines every 100 units in world coordinates
-
-            // Use the actual render bounds from Matter.js
-            const viewTranslate = render.bounds.min;
-            const viewScaleX = render.options.width / (render.bounds.max.x - render.bounds.min.x);
-            const viewScaleY = render.options.height / (render.bounds.max.y - render.bounds.min.y);
-
-            context.strokeStyle = 'rgba(51, 51, 51, 0.5)'; // Grey, thinner, slightly transparent
-            context.lineWidth = 1;
-
-            // Draw vertical lines
-            context.beginPath();
-            for (let x = Math.floor(render.bounds.min.x / gridSpacing) * gridSpacing; x < render.bounds.max.x + gridSpacing; x += gridSpacing) {
-                const canvasX = (x - viewTranslate.x) * viewScaleX;
-                context.moveTo(canvasX, (render.bounds.min.y - viewTranslate.y) * viewScaleY);
-                context.lineTo(canvasX, (render.bounds.max.y - viewTranslate.y) * viewScaleY);
-
-                // Add label
-                context.fillStyle = '#999999'; // Grey
-                context.font = '12px Arial'; // Adjust font size as needed
-                context.textAlign = 'center'; // For centering text
-                context.textBaseline = 'top'; // Position label below the line
-                context.fillText(`${x}`, canvasX, (render.bounds.min.y - viewTranslate.y) * viewScaleY + 5); // Offset slightly from the top
-            }
-            context.stroke();
-
-            // Draw horizontal lines
-            context.beginPath();
-            for (let y = Math.floor(render.bounds.min.y / gridSpacing) * gridSpacing; y < render.bounds.max.y + gridSpacing; y += gridSpacing) {
-                const canvasY = (y - viewTranslate.y) * viewScaleY;
-                context.moveTo((render.bounds.min.x - viewTranslate.x) * viewScaleX, canvasY);
-                context.lineTo((render.bounds.max.x - viewTranslate.x) * viewScaleX, canvasY);
-
-                // Add label
-                context.fillText(`${y}`, (render.bounds.min.x - viewTranslate.x) * viewScaleX + 5, canvasY); // Offset slightly from the left
-            }
-            context.stroke();
-        }
-        
-        // --- Initialization ---
-        function init() {
-            createDiagnosticTrack();
-            bike = createBike(400, 400, MOTOCROSS_PRESET);
-
-            const mouse = Mouse.create(render.canvas);
-            const mouseConstraint = MouseConstraint.create(engine, {
-                mouse: mouse,
-                constraint: {
-                    stiffness: 0.2,
-                    render: {
-                        visible: true
-                    }
-                }
-            });
-            World.add(world, mouseConstraint);
-            render.mouse = mouse;
-
-            window.addEventListener('keydown', (e) => {
-                keys[e.key] = true;
-                if (e.key.toLowerCase() === 'g') {
-                    toggleAirTuneMode();
-                }
-            });
-            window.addEventListener('keyup', (e) => { keys[e.key] = false; });
-
-            const runner = Runner.create();
-            const gui = MatterTools.Gui.create(engine, runner);
-            const inspector = MatterTools.Inspector.create(engine, render);
-            console.log(inspector);
-            inspector.options.consoleClear = false;
-            
-            // --- Constraint Highlighting on Matter.js Canvas ---
-            // V46: Draw grid and selected constraint info after rendering
-            Events.on(inspector, 'select', (event) => {
-  console.log("--- Inspector 'select' event FIRED ---");
-
-  // Let's see the entire selection array
-  console.log("event.source.select:", event.source.select);
-
-  const selection = event.source.select[0];
-
-  if (selection && selection.type === 'constraint') {
-    render.selectedConstraint = selection;
-    // Confirm the assignment right after it happens
-    console.log("SUCCESS: Assigned constraint to render.selectedConstraint.", render.selectedConstraint);
-  } else {
-                    console.log("Something else selected or deselected. render.selectedConstraint after setting:", render.selectedConstraint);
-                }
-                console.log("render.selectedConstraint after select listener:", render.selectedConstraint);
- });
-            
-            Events.on(render, 'afterRender', function() {
-                const context = render.context; // context is already available here
-                drawGrid(context); // Draw grid first
-
-                if (render.selectedConstraint) {
-                    drawSelectedConstraintHighlight(context, render.selectedConstraint);
-                }
-            });
-            Events.on(runner, 'beforeUpdate', updateGameLogic); // Game logic updates (controls, etc.)
-            Events.on(engine, 'afterUpdate', () => {});
-            Runner.run(runner, engine);
-        }
-
+    
+        // --- Start the simulation ---
         init();
     </script>
 </body>
