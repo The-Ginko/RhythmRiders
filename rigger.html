@@ -63,7 +63,7 @@
             text-align: center;
             font-weight: 500;
         }
-        .slider-group, .input-group {
+        .slider-group, .input-group, .checkbox-group {
             margin-bottom: 12px;
         }
         .slider-group label, .input-group label, .checkbox-group label {
@@ -82,6 +82,10 @@
             width: 100%;
             cursor: pointer;
         }
+        .slider-group input[type="range"]:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
         .input-group input[type="number"] {
             width: 48%;
             background-color: #333;
@@ -89,12 +93,6 @@
             border: 1px solid #555;
             border-radius: 4px;
             padding: 4px;
-            -moz-appearance: textfield;
-        }
-        .input-group input::-webkit-outer-spin-button,
-        .input-group input::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            margin: 0;
         }
         .input-group div {
             display: flex;
@@ -153,11 +151,23 @@
             </div>
             <div class="slider-group">
                 <label for="length">Length: <span id="length-value">100</span></label>
-                <input type="range" id="length" min="10" max="500" step="1" value="100">
+                <input type="range" id="length" min="0" max="500" step="1" value="100">
+            </div>
+            <div class="input-group">
+                <label>Point A Offset (x, y)</label>
+                <div><input type="number" id="constraint-point-ax" step="1" value="0"><input type="number" id="constraint-point-ay" step="1" value="0"></div>
+            </div>
+            <div class="input-group">
+                <label>Point B Offset (x, y)</label>
+                <div><input type="number" id="constraint-point-bx" step="1" value="0"><input type="number" id="constraint-point-by" step="1" value="0"></div>
             </div>
             <button id="delete-constraint-btn" class="delete-button" style="display: none;">Delete Constraint</button>
         </div>
         <div id="object-editor" style="display: none;">
+             <div class="checkbox-group">
+                <label for="is-static">Static</label>
+                <input type="checkbox" id="is-static">
+            </div>
             <div class="slider-group">
                 <label for="angle">Angle: <span id="angle-value">0</span>°</label>
                 <input type="range" id="angle" min="0" max="360" step="1" value="0">
@@ -170,6 +180,14 @@
                 <label for="friction">Friction: <span id="friction-value">0.10</span></label>
                 <input type="range" id="friction" min="0" max="1" step="0.01" value="0.1">
             </div>
+            <div class="slider-group">
+                <label for="friction-static">Static Friction: <span id="friction-static-value">0.50</span></label>
+                <input type="range" id="friction-static" min="0" max="1" step="0.01" value="0.5">
+            </div>
+            <div class="slider-group">
+                <label for="friction-air">Air Friction: <span id="friction-air-value">0.010</span></label>
+                <input type="range" id="friction-air" min="0" max="0.1" step="0.001" value="0.01">
+            </div>
              <div class="slider-group">
                 <label for="density">Density: <span id="density-value">0.001</span></label>
                 <input type="range" id="density" min="0.001" max="0.1" step="0.001" value="0.001">
@@ -180,15 +198,19 @@
             </div>
             <div class="input-group">
                 <label>Center of Mass Offset (x, y)</label>
-                <div><input type="number" id="com-offset-x" step="1"><input type="number" id="com-offset-y" step="1"></div>
+                <div><input type="number" id="com-offset-x" step="1" value="0"><input type="number" id="com-offset-y" step="1" value="0"></div>
             </div>
-            <div id="size-editor-circle" class="slider-group">
+            <div id="size-editor-circle" class="slider-group" style="display: none;">
                 <label for="radius">Radius: <span id="radius-value">30</span></label>
                 <input type="range" id="radius" min="10" max="100" step="1" value="30">
             </div>
-             <div id="size-editor-rect">
+            <div id="size-editor-rect" style="display: none;">
                 <div class="slider-group"><label for="width">Width: <span id="width-value">50</span></label><input type="range" id="width" min="10" max="200" step="1" value="50"></div>
                 <div class="slider-group"><label for="height">Height: <span id="height-value">50</span></label><input type="range" id="height" min="10" max="200" step="1" value="50"></div>
+            </div>
+             <div id="size-editor-polygon" class="slider-group" style="display: none;">
+                <label for="polygon-size">Size: <span id="polygon-size-value">40</span></label>
+                <input type="range" id="polygon-size" min="10" max="100" step="1" value="40">
             </div>
             <div class="input-group">
                 <label>Collision Group</label>
@@ -209,7 +231,11 @@
     <div id="controls-panel" class="ui-panel">
         <div class="control-group">
             <h3>Add Object</h3>
-            <select id="object-type"><option value="circle">Circle</option><option value="rectangle">Rectangle</option></select>
+            <select id="object-type">
+                <option value="circle">Circle</option>
+                <option value="rectangle">Rectangle</option>
+                <option value="triangle">Triangle</option>
+            </select>
             <button id="add-object-btn" style="margin-top: 10px;">Add to Scene</button>
         </div>
         <div class="control-group">
@@ -222,10 +248,9 @@
         <div class="control-group" id="world-controls">
             <h3>World Properties</h3>
             <div class="slider-group">
-                <label for="gravity-slider">Gravity Scale: <span id="gravity-value">1.00</span></label>
+                <label for="gravity-slider">Gravity Y: <span id="gravity-value">1.00</span></label>
                 <input type="range" id="gravity-slider" min="0" max="2" step="0.01" value="1">
             </div>
-            <!-- Add other world properties here -->
         </div>
     </div>
 
@@ -246,7 +271,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
     <script>
         // --- SETUP ---
-        const { Engine, Render, Runner, Bodies, Body, Composite, Constraint, Mouse, MouseConstraint, Events, Query, Vector } = Matter;
+        const { Engine, Render, Runner, Bodies, Body, Composite, Constraint, Mouse, MouseConstraint, Events, Query, Vector, Vertices } = Matter;
         const engine = Engine.create();
         const world = engine.world;
         const render = Render.create({ element: document.body, engine: engine, options: { width: window.innerWidth, height: window.innerHeight, wireframes: false, background: '#1a1a1a' } });
@@ -258,9 +283,10 @@
         const initialBodies = [
             Bodies.circle(window.innerWidth / 2 - 200, 200, 30, { render: { fillStyle: '#4285F4' } }),
             Bodies.rectangle(window.innerWidth / 2, 150, 50, 50, { render: { fillStyle: '#DB4437' } }),
-            Bodies.circle(window.innerWidth / 2 + 200, 200, 30, { render: { fillStyle: '#0F9D58' } })
+            Bodies.polygon(window.innerWidth / 2 + 200, 200, 3, 30, { render: { fillStyle: '#0F9D58' } })
         ];
- Composite.add(world, initialBodies); const wallOptions = { isStatic: true, render: { fillStyle: '#444' } };
+        Composite.add(world, initialBodies); 
+        const wallOptions = { isStatic: true, render: { fillStyle: '#444' } };
         const wallThickness = 60;
         Composite.add(world, [
             Bodies.rectangle(window.innerWidth / 2, window.innerHeight - (wallThickness / 2), window.innerWidth, wallThickness, wallOptions),
@@ -286,7 +312,6 @@
         // --- WORLD CONTROLS REFERENCES ---
         const gravitySlider = document.getElementById('gravity-slider');
         const gravityValueSpan = document.getElementById('gravity-value');
-        // Initialize gravity value display
         gravityValueSpan.textContent = parseFloat(gravitySlider.value).toFixed(2);
 
         // --- UI LOGIC ---
@@ -300,9 +325,6 @@
             if (mode === 'constraint') uiTitle.textContent = "Edit Constraint";
             if (mode === 'object') {
                 uiTitle.textContent = "Edit Object";
-                const isCircle = selectedObject.circleRadius != null;
-                document.getElementById('size-editor-circle').style.display = isCircle ? 'block' : 'none';
-                document.getElementById('size-editor-rect').style.display = isCircle ? 'none' : 'block';
             }
         }
 
@@ -315,10 +337,11 @@
             const options = { render: { fillStyle: randomColor } };
             if (objectType === 'circle') {
                 newBody = Bodies.circle(x, 100, 30, options);
-            } else {
+            } else if (objectType === 'rectangle') {
                 newBody = Bodies.rectangle(x, 100, 50, 80, options);
+            } else if (objectType === 'triangle') {
+                newBody = Bodies.polygon(x, 100, 3, 40, options);
             }
-            // New bodies are added as non-static by default, which is desired for dragging in build mode
             Composite.add(world, newBody);
         });
 
@@ -326,13 +349,13 @@
         document.getElementById('build-mode-checkbox').addEventListener('change', (e) => {
              isBuildMode = e.target.checked;
              if (isBuildMode) {
-                engine.gravity.y = 0; // Set y gravity to 0 for build mode
+                engine.gravity.y = 0;
                 Composite.remove(world, mouseConstraint); 
             } else {
-                 engine.gravity.y = 1; // Restore y gravity
+                 engine.gravity.y = 1;
                  Composite.add(world, mouseConstraint); 
-    }
-});
+            }
+        });
 
         // --- DELETE LOGIC ---
         function showConfirmationModal(type) {
@@ -344,85 +367,179 @@
         document.getElementById('deny-delete').addEventListener('click', () => deleteModal.style.display = 'none');
         document.getElementById('confirm-delete').addEventListener('click', () => {
             if (selectedConstraint) Composite.remove(world, selectedConstraint);
-            if (selectedObject) {
-                Composite.remove(world, selectedObject);
+            if (selectedObject) Composite.remove(world, selectedObject);
             deselectAll();
             deleteModal.style.display = 'none';
-            } // Close the if block
-        }); // Close the event listener
+        });
 
         // --- PROPERTY HANDLERS ---
-        const allObjectInputs = [...document.querySelectorAll('#object-editor input')];
-        allObjectInputs.forEach(input => input.addEventListener('input', onObjectPropertyChange));
-        const allConstraintInputs = [...document.querySelectorAll('#constraint-editor input')];
-        allConstraintInputs.forEach(input => input.addEventListener('input', onConstraintPropertyChange));
+        function setupPropertyHandlers() {
+            const inputs = {
+                isStatic: document.getElementById('is-static'),
+                angle: document.getElementById('angle'),
+                restitution: document.getElementById('restitution'),
+                friction: document.getElementById('friction'),
+                frictionStatic: document.getElementById('friction-static'),
+                frictionAir: document.getElementById('friction-air'),
+                density: document.getElementById('density'),
+                posX: document.getElementById('position-x'),
+                posY: document.getElementById('position-y'),
+                comX: document.getElementById('com-offset-x'),
+                comY: document.getElementById('com-offset-y'),
+                radius: document.getElementById('radius'),
+                width: document.getElementById('width'),
+                height: document.getElementById('height'),
+                polygonSize: document.getElementById('polygon-size'),
+                group: document.getElementById('collision-group'),
+                category: document.getElementById('collision-category'),
+                mask: document.getElementById('collision-mask'),
+                stiffness: document.getElementById('stiffness'),
+                damping: document.getElementById('damping'),
+                length: document.getElementById('length'),
+                constraintPointAX: document.getElementById('constraint-point-ax'),
+                constraintPointAY: document.getElementById('constraint-point-ay'),
+                constraintPointBX: document.getElementById('constraint-point-bx'),
+                constraintPointBY: document.getElementById('constraint-point-by')
+            };
 
-        function onConstraintPropertyChange() {
-             if (!selectedConstraint) return;
-             const stiffness = parseFloat(document.getElementById('stiffness').value);
-             const damping = parseFloat(document.getElementById('damping').value);
-             const length = parseFloat(document.getElementById('length').value);
-             selectedConstraint.stiffness = stiffness;
-             selectedConstraint.damping = damping;
-             selectedConstraint.length = length;
-             updateEditorLabels();
+            inputs.isStatic.addEventListener('change', () => {
+                if (selectedObject) Body.setStatic(selectedObject, inputs.isStatic.checked);
+            });
+            inputs.angle.addEventListener('input', () => {
+                if (selectedObject) Body.setAngle(selectedObject, parseFloat(inputs.angle.value) * (Math.PI / 180));
+                updateEditorLabels();
+            });
+            inputs.restitution.addEventListener('input', () => {
+                if (selectedObject) selectedObject.restitution = parseFloat(inputs.restitution.value);
+                updateEditorLabels();
+            });
+            inputs.friction.addEventListener('input', () => {
+                if (selectedObject) selectedObject.friction = parseFloat(inputs.friction.value);
+                updateEditorLabels();
+            });
+            inputs.frictionStatic.addEventListener('input', () => {
+                if (selectedObject) selectedObject.frictionStatic = parseFloat(inputs.frictionStatic.value);
+                updateEditorLabels();
+            });
+            inputs.frictionAir.addEventListener('input', () => {
+                if (selectedObject) selectedObject.frictionAir = parseFloat(inputs.frictionAir.value);
+                updateEditorLabels();
+            });
+            inputs.density.addEventListener('input', () => {
+                if (selectedObject) Body.setDensity(selectedObject, parseFloat(inputs.density.value));
+                updateEditorLabels();
+            });
+            inputs.posX.addEventListener('input', () => {
+                if (selectedObject) Body.setPosition(selectedObject, { x: parseFloat(inputs.posX.value), y: selectedObject.position.y });
+                updateEditorLabels();
+            });
+            inputs.posY.addEventListener('input', () => {
+                if (selectedObject) Body.setPosition(selectedObject, { x: selectedObject.position.x, y: parseFloat(inputs.posY.value) });
+                updateEditorLabels();
+            });
+             inputs.comX.addEventListener('input', () => {
+                if (selectedObject) {
+                    const newOffsetX = parseFloat(inputs.comX.value) || 0;
+                    const currentOffsetY = parseFloat(inputs.comY.value) || 0;
+                    Body.setCentre(selectedObject, { x: newOffsetX, y: currentOffsetY }, true);
+                }
+            });
+            inputs.comY.addEventListener('input', () => {
+                if (selectedObject) {
+                    const newOffsetY = parseFloat(inputs.comY.value) || 0;
+                    const currentOffsetX = parseFloat(inputs.comX.value) || 0;
+                    Body.setCentre(selectedObject, { x: currentOffsetX, y: newOffsetY }, true);
+                }
+            });
+            inputs.radius.addEventListener('input', () => {
+                if (selectedObject && selectedObject.circleRadius) {
+                    const newRadius = parseFloat(inputs.radius.value);
+                    const oldRadius = selectedObject.circleRadius;
+                    if (oldRadius > 0) Body.scale(selectedObject, newRadius / oldRadius, newRadius / oldRadius);
+                }
+                updateEditorLabels();
+            });
+            inputs.width.addEventListener('input', () => {
+                if (selectedObject && !selectedObject.circleRadius) {
+                    const newWidth = parseFloat(inputs.width.value);
+                    const oldWidth = selectedObject.bounds.max.x - selectedObject.bounds.min.x;
+                    if (oldWidth > 0) Body.scale(selectedObject, newWidth / oldWidth, 1);
+                }
+                updateEditorLabels();
+            });
+            inputs.height.addEventListener('input', () => {
+                if (selectedObject && !selectedObject.circleRadius) {
+                    const newHeight = parseFloat(inputs.height.value);
+                    const oldHeight = selectedObject.bounds.max.y - selectedObject.bounds.min.y;
+                    if (oldHeight > 0) Body.scale(selectedObject, 1, newHeight / oldHeight);
+                }
+                updateEditorLabels();
+            });
+            inputs.polygonSize.addEventListener('input', () => {
+                if (selectedObject && !selectedObject.circleRadius && selectedObject.vertices.length !== 4) {
+                    const newSize = parseFloat(inputs.polygonSize.value);
+                    const currentSize = Math.sqrt(selectedObject.area / (selectedObject.vertices.length === 3 ? 0.433 : 1));
+                    const scaleFactor = newSize / currentSize;
+                    if (currentSize > 0 && isFinite(scaleFactor)) {
+                        Body.scale(selectedObject, scaleFactor, scaleFactor);
+                    }
+                }
+                updateEditorLabels();
+            });
+            inputs.group.addEventListener('input', () => {
+                if (selectedObject && !isNaN(parseInt(inputs.group.value))) selectedObject.collisionFilter.group = parseInt(inputs.group.value);
+            });
+            inputs.category.addEventListener('input', () => {
+                if (selectedObject && !isNaN(parseInt(inputs.category.value))) selectedObject.collisionFilter.category = parseInt(inputs.category.value);
+            });
+            inputs.mask.addEventListener('input', () => {
+                if (selectedObject && !isNaN(parseInt(inputs.mask.value))) selectedObject.collisionFilter.mask = parseInt(inputs.mask.value);
+            });
+
+            // Constraint Listeners
+            inputs.stiffness.addEventListener('input', () => {
+                if(selectedConstraint) selectedConstraint.stiffness = parseFloat(inputs.stiffness.value);
+                updateEditorLabels();
+            });
+            inputs.damping.addEventListener('input', () => {
+                if(selectedConstraint) selectedConstraint.damping = parseFloat(inputs.damping.value);
+                updateEditorLabels();
+            });
+            inputs.length.addEventListener('input', () => {
+                if(selectedConstraint) selectedConstraint.length = parseFloat(inputs.length.value);
+                updateEditorLabels();
+            });
+            inputs.constraintPointAX.addEventListener('input', () => {
+                if(selectedConstraint) selectedConstraint.pointA.x = parseFloat(inputs.constraintPointAX.value);
+            });
+            inputs.constraintPointAY.addEventListener('input', () => {
+                if(selectedConstraint) selectedConstraint.pointA.y = parseFloat(inputs.constraintPointAY.value);
+            });
+            inputs.constraintPointBX.addEventListener('input', () => {
+                if(selectedConstraint) selectedConstraint.pointB.x = parseFloat(inputs.constraintPointBX.value);
+            });
+            inputs.constraintPointBY.addEventListener('input', () => {
+                if(selectedConstraint) selectedConstraint.pointB.y = parseFloat(inputs.constraintPointBY.value);
+            });
         }
-
-        function onObjectPropertyChange() {
-    if (!selectedObject) return;
-    const angleDeg = parseFloat(document.getElementById('angle').value);
-    const restitution = parseFloat(document.getElementById('restitution').value);
-    const friction = parseFloat(document.getElementById('friction').value);
-    const density = parseFloat(document.getElementById('density').value);
-    const posX = parseFloat(document.getElementById('position-x').value);
-    const posY = parseFloat(document.getElementById('position-y').value);
-    const comOffsetX = parseFloat(document.getElementById('com-offset-x').value);
-    const comOffsetY = parseFloat(document.getElementById('com-offset-y').value);
-    const group = parseInt(document.getElementById('collision-group').value);
-    const category = parseInt(document.getElementById('collision-category').value);
-    const mask = parseInt(document.getElementById('collision-mask').value);
-
-    Body.setAngle(selectedObject, angleDeg * (Math.PI / 180));
-    selectedObject.restitution = restitution;
-    selectedObject.friction = friction;
-    
-    // --- FIX: Directly set density and mass ---
-    selectedObject.density = density;
-    Body.setMass(selectedObject, selectedObject.density * selectedObject.area);
-
-
-    Body.setPosition(selectedObject, { x: posX, y: posY });
-    Body.setCentre(selectedObject, { x: comOffsetX, y: comOffsetY }); // Corrected this in the previous response
-
-    if (!isNaN(group)) selectedObject.collisionFilter.group = group;
-    if (!isNaN(category)) selectedObject.collisionFilter.category = category;
-    if (!isNaN(mask)) selectedObject.collisionFilter.mask = mask;
-
-    if (selectedObject.circleRadius) {
-        const newRadius = parseFloat(document.getElementById('radius').value);
-        const oldRadius = selectedObject.circleRadius;
-        if (oldRadius > 0) Body.scale(selectedObject, newRadius / oldRadius, newRadius / oldRadius);
-    } else {
-        const newWidth = parseFloat(document.getElementById('width').value);
-        const newHeight = parseFloat(document.getElementById('height').value);
-        const oldWidth = selectedObject.bounds.max.x - selectedObject.bounds.min.x;
-        const oldHeight = selectedObject.bounds.max.y - selectedObject.bounds.min.y;
-        if (oldWidth > 0 && oldHeight > 0) Body.scale(selectedObject, newWidth / oldWidth, newHeight / oldHeight);
-    }
-    updateEditorLabels();
-}
+        setupPropertyHandlers();
 
         function updateEditorLabels() {
             if (selectedObject) {
                 document.getElementById('angle-value').textContent = Math.round(selectedObject.angle * (180 / Math.PI)) % 360;
                 document.getElementById('restitution-value').textContent = selectedObject.restitution.toFixed(2);
                 document.getElementById('friction-value').textContent = selectedObject.friction.toFixed(2);
+                document.getElementById('friction-static-value').textContent = selectedObject.frictionStatic.toFixed(2);
+                document.getElementById('friction-air-value').textContent = selectedObject.frictionAir.toFixed(3);
                 document.getElementById('density-value').textContent = selectedObject.density.toFixed(3);
-                if (selectedObject.circleRadius) {
+                if (selectedObject.circleRadius > 0) {
                     document.getElementById('radius-value').textContent = Math.round(selectedObject.circleRadius);
-                } else {
+                } else if (selectedObject.vertices.length === 4) {
                     document.getElementById('width-value').textContent = Math.round(selectedObject.bounds.max.x - selectedObject.bounds.min.x);
                     document.getElementById('height-value').textContent = Math.round(selectedObject.bounds.max.y - selectedObject.bounds.min.y);
+                } else {
+                    const size = Math.sqrt(selectedObject.area / (selectedObject.vertices.length === 3 ? 0.433 : 1));
+                    document.getElementById('polygon-size-value').textContent = Math.round(size);
                 }
             }
             if (selectedConstraint) {
@@ -435,42 +552,66 @@
         function populateEditor(item) {
             if (item.type === 'body') {
                 const body = item;
+                const isCircle = body.circleRadius > 0;
+                const isRectangle = !isCircle && body.vertices.length === 4;
+                
+                document.getElementById('size-editor-circle').style.display = 'none';
+                document.getElementById('size-editor-rect').style.display = 'none';
+                document.getElementById('size-editor-polygon').style.display = 'none';
+
+                if (isCircle) {
+                    document.getElementById('size-editor-circle').style.display = 'block';
+                    document.getElementById('radius').value = body.circleRadius;
+                } else if (isRectangle) {
+                    document.getElementById('size-editor-rect').style.display = 'block';
+                    document.getElementById('width').value = body.bounds.max.x - body.bounds.min.x;
+                    document.getElementById('height').value = body.bounds.max.y - body.bounds.min.y;
+                } else { 
+                    document.getElementById('size-editor-polygon').style.display = 'block';
+                    const size = Math.sqrt(body.area / (body.vertices.length === 3 ? 0.433 : 1));
+                    document.getElementById('polygon-size').value = size;
+                }
+
+                document.getElementById('is-static').checked = body.isStatic;
                 document.getElementById('angle').value = Math.round(body.angle * (180 / Math.PI)) % 360;
                 document.getElementById('restitution').value = body.restitution;
                 document.getElementById('friction').value = body.friction;
+                document.getElementById('friction-static').value = body.frictionStatic;
+                document.getElementById('friction-air').value = body.frictionAir;
                 document.getElementById('density').value = body.density;
                 document.getElementById('position-x').value = Math.round(body.position.x);
                 document.getElementById('position-y').value = Math.round(body.position.y);
-                document.getElementById('com-offset-x').value = 0;
-                document.getElementById('com-offset-y').value = 0;
+
+                const geometricCenter = Vertices.centre(body.vertices);
+                const offsetX = body.position.x - geometricCenter.x;
+                const offsetY = body.position.y - geometricCenter.y;
+                document.getElementById('com-offset-x').value = Math.round(offsetX);
+                document.getElementById('com-offset-y').value = Math.round(offsetY);
+                
                 document.getElementById('collision-group').value = body.collisionFilter.group;
                 document.getElementById('collision-category').value = body.collisionFilter.category;
                 document.getElementById('collision-mask').value = body.collisionFilter.mask;
-                if (body.circleRadius) {
-                    document.getElementById('radius').value = body.circleRadius;
-                } else {
-                    document.getElementById('width').value = body.bounds.max.x - body.bounds.min.x;
-                    document.getElementById('height').value = body.bounds.max.y - body.bounds.min.y;
-                }
+                
             } else if (item.type === 'constraint') {
                 const constraint = item;
                 document.getElementById('stiffness').value = constraint.stiffness;
                 document.getElementById('damping').value = constraint.damping;
                 document.getElementById('length').value = constraint.length;
+                document.getElementById('constraint-point-ax').value = constraint.pointA.x;
+                document.getElementById('constraint-point-ay').value = constraint.pointA.y;
+                document.getElementById('constraint-point-bx').value = constraint.pointB.x;
+                document.getElementById('constraint-point-by').value = constraint.pointB.y;
             }
             updateEditorLabels();
         }
 
-            // --- WORLD CONTROLS LOGIC ---
-    gravitySlider.addEventListener('input', function() {
-    const gravityValue = parseFloat(this.value);
-    engine.gravity.y = gravityValue; // Change this from .scale to .y
-    gravityValueSpan.textContent = gravityValue.toFixed(2);
-});
+        gravitySlider.addEventListener('input', function() {
+            const gravityValue = parseFloat(this.value);
+            engine.gravity.y = gravityValue;
+            gravityValueSpan.textContent = gravityValue.toFixed(2);
+        });
 
-        // --- SELECTION AND MAIN LOGIC ---
         const distToSegment = (p, v, w) => {
-            // Calculate the distance from point p to the line segment from v to w
             const l2 = Vector.magnitudeSquared(Vector.sub(w, v)); if (l2 === 0) return Vector.magnitude(Vector.sub(p, v));
             let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
             t = Math.max(0, Math.min(1, t));
@@ -479,7 +620,7 @@
         };
 
         const updateSelectionVisuals = () => {
- world.bodies.forEach(body => { body.render.lineWidth = 0; });
+            world.bodies.forEach(body => { body.render.lineWidth = 0; });
             Composite.allConstraints(world).forEach(c => { c.render.lineWidth = 2; c.render.strokeStyle = '#999'; });
             selectedBodies.forEach(body => { body.render.strokeStyle = '#F4B400'; body.render.lineWidth = 3; });
             if (selectedObject) { selectedObject.render.strokeStyle = '#F4B400'; selectedObject.render.lineWidth = 4; }
@@ -492,11 +633,12 @@
         };
 
         let isDragging = false;
-        const dragThreshold = 5; // pixels
+        const dragThreshold = 5;
 
         render.canvas.addEventListener('mousemove', function(event) {
             if (isBuildMode && clickedBody) {
                 const currentMousePosition = { x: event.offsetX, y: event.offsetY };
+                if (!mouseDownPosition) return;
                 const distance = Vector.magnitude(Vector.sub(currentMousePosition, mouseDownPosition));
 
                 if (!isDragging && distance > dragThreshold) {
@@ -518,7 +660,7 @@
                 if (clickedBodies.length > 0) {
                     clickedBody = clickedBodies[0];
                 }
-                event.preventDefault(); // Prevent default canvas behaviors in build mode
+                event.preventDefault();
             }
         });
 
@@ -527,94 +669,93 @@
             if (isBuildMode) {
                 if (isDragging) {
                     isDragging = false;
-                    draggingBody = null; // Stop dragging
+                    draggingBody = null;
                 } else if (clickedBody) {
-                    // It was a click, not a drag
                     deselectAll();
                     selectedObject = clickedBody;
                     showEditor('object');
                     populateEditor(selectedObject);
                     updateSelectionVisuals();
                 }
-                // Clear clicked body and mouse position regardless of drag or click
                 clickedBody = null;
                 mouseDownPosition = null;
             }
         });
 
-        // Listen for MouseConstraint events for selection and constraint creation when not in build mode
-        // These events are handled by the mouseConstraint when isBuildMode is false
-
-
-        // Listen for MouseConstraint events for updating visuals when dragging ends
         Events.on(mouseConstraint, 'mouseup', function(event) {
             if (!isBuildMode) {
-                // The mouse constraint handles the dragging; we just need to update visuals after it's done
                 updateSelectionVisuals();
             }
         });
 
-        // Listen for MouseConstraint events for updating visuals when dragging starts (optional but good practice)
         Events.on(mouseConstraint, 'startdrag', function(event) {
              if (!isBuildMode) {
-                 // The mouse constraint handles the dragging; we just need to update visuals when it starts
                  updateSelectionVisuals();
              }
          });
 
-        // Listen for MouseConstraint events for selection (left-click) and constraint start (right-click drag) when not in build mode
-        Events.on(mouseConstraint, 'startdrag', function(event) {
-            if (!isBuildMode && event.mouse.button === 2) {
-                 const mousePosition = event.mouse.position;
-                const clickedBodies = Query.point(world.bodies, mousePosition);
-                 if (clickedBodies.length > 0) {
-                    const body = clickedBodies[0];
-                    const index = selectedBodies.indexOf(body);
-                    if (index === -1) {
-                        if (selectedBodies.length < 2) selectedBodies.push(body);
-                    } else {
-                        selectedBodies.splice(index, 1);
-                    }
-                    // If two bodies are selected by right-click, create a constraint
-                    if (selectedBodies.length === 2) {
-                        const newConstraint = Constraint.create({
-                            bodyA: selectedBodies[0], bodyB: selectedBodies[1],
-                            stiffness: 0.1, damping: 0.05, length: 100,
-                            render: { strokeStyle: '#999', lineWidth: 2 }
-                        });
-                        Composite.add(world, newConstraint);
-                        deselectAll();
-                    }
-                 }
-            }
-        });
-
         Events.on(mouseConstraint, 'mousedown', function(event) {
             if (!isBuildMode) {
                 const mousePosition = event.mouse.position;
-                const clickedBodies = Query.point(world.bodies, mousePosition);
- 
+                
                 if (event.mouse.button === 0) { // Left Click
-                    if (clickedBodies.length > 0) {
-                        const body = clickedBodies[0];
-                        deselectAll();
-                        selectedObject = body;
-                        showEditor('object');
-                        populateEditor(selectedObject);
-                    } else {
-                        let clickedConstraint = null;
-                        for (const constraint of Composite.allConstraints(world)) { // Check if clicked a constraint
-                            if (!constraint.bodyA || !constraint.bodyB) continue;
-                            if (distToSegment(mousePosition, constraint.bodyA.position, constraint.bodyB.position) < 10) { clickedConstraint = constraint; break; }
+                    const clickedBodies = Query.point(world.bodies, mousePosition);
+                    const clickedConstraints = [];
+                    for (const constraint of Composite.allConstraints(world)) {
+                        if (!constraint.bodyA || !constraint.bodyB) continue;
+                        if (distToSegment(mousePosition, constraint.bodyA.position, constraint.bodyB.position) < 10) {
+                            clickedConstraints.push(constraint);
                         }
-                        if (clickedConstraint) {
-                            deselectAll();
-                            selectedConstraint = clickedConstraint;
+                    }
+
+                    const candidates = [...clickedBodies, ...clickedConstraints];
+                    
+                    if (candidates.length > 0) {
+                        const currentSelection = selectedObject || selectedConstraint;
+                        const currentIndex = candidates.indexOf(currentSelection);
+                        const nextIndex = (currentIndex + 1) % candidates.length;
+                        const nextSelection = candidates[nextIndex];
+
+                        deselectAll();
+
+                        if (nextSelection.type === 'body') {
+                            selectedObject = nextSelection;
+                            showEditor('object');
+                            populateEditor(selectedObject);
+                        } else {
+                            selectedConstraint = nextSelection;
                             showEditor('constraint');
                             populateEditor(selectedConstraint);
-                        } else { deselectAll(); }
+                        }
+                    } else {
+                        deselectAll();
                     }
-                    updateSelectionVisuals(); // Update visuals after selection changes
+                    updateSelectionVisuals();
+
+                } else if (event.mouse.button === 2) { // Right Click
+                    const clickedBodies = Query.point(world.bodies, mousePosition);
+                    if (clickedBodies.length > 0) {
+                        const body = clickedBodies[0];
+                        const index = selectedBodies.indexOf(body);
+                        if (index === -1) {
+                            if (selectedBodies.length < 2) {
+                                selectedBodies.push(body);
+                            }
+                        } else {
+                            selectedBodies.splice(index, 1);
+                        }
+
+                        if (selectedBodies.length === 2) {
+                            const newConstraint = Constraint.create({
+                                bodyA: selectedBodies[0], bodyB: selectedBodies[1],
+                                stiffness: 0.1, damping: 0.05, length: 100,
+                                render: { strokeStyle: '#999', lineWidth: 2 }
+                            });
+                            Composite.add(world, newConstraint);
+                            selectedBodies = []; // Clear for next constraint
+                        }
+                        updateSelectionVisuals();
+                    }
                 }
             }
         });
