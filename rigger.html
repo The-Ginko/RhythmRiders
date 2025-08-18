@@ -223,7 +223,7 @@
             <h3>World Properties</h3>
             <div class="slider-group">
                 <label for="gravity-slider">Gravity Scale: <span id="gravity-value">1.00</span></label>
-                <input type="range" id="gravity-slider" min="0" max="1" step="0.01" value="1">
+                <input type="range" id="gravity-slider" min="0" max="2" step="0.01" value="1">
             </div>
             <!-- Add other world properties here -->
         </div>
@@ -324,15 +324,15 @@
 
         // --- BUILD MODE LOGIC ---
         document.getElementById('build-mode-checkbox').addEventListener('change', (e) => {
-            isBuildMode = e.target.checked;
-            if (isBuildMode) {
-                engine.gravity.scale = 0; // Disable gravity
-                Composite.remove(world, mouseConstraint); // Remove mouse constraint to prevent default dragging behavior
+             isBuildMode = e.target.checked;
+             if (isBuildMode) {
+                engine.gravity.y = 0; // Set y gravity to 0 for build mode
+                Composite.remove(world, mouseConstraint); 
             } else {
-                engine.gravity.scale = 1; // Re-enable gravity
-                Composite.add(world, mouseConstraint); // Re-add mouse constraint
-            }
-        });
+                 engine.gravity.y = 1; // Restore y gravity
+                 Composite.add(world, mouseConstraint); 
+    }
+});
 
         // --- DELETE LOGIC ---
         function showConfirmationModal(type) {
@@ -369,43 +369,48 @@
         }
 
         function onObjectPropertyChange() {
-            if (!selectedObject) return;
-            const angleDeg = parseFloat(document.getElementById('angle').value);
-            const restitution = parseFloat(document.getElementById('restitution').value);
-            const friction = parseFloat(document.getElementById('friction').value);
-            const density = parseFloat(document.getElementById('density').value);
-            const posX = parseFloat(document.getElementById('position-x').value);
-            const posY = parseFloat(document.getElementById('position-y').value);
-            const comOffsetX = parseFloat(document.getElementById('com-offset-x').value);
-            const comOffsetY = parseFloat(document.getElementById('com-offset-y').value);
-            const group = parseInt(document.getElementById('collision-group').value);
-            const category = parseInt(document.getElementById('collision-category').value);
-            const mask = parseInt(document.getElementById('collision-mask').value);
+    if (!selectedObject) return;
+    const angleDeg = parseFloat(document.getElementById('angle').value);
+    const restitution = parseFloat(document.getElementById('restitution').value);
+    const friction = parseFloat(document.getElementById('friction').value);
+    const density = parseFloat(document.getElementById('density').value);
+    const posX = parseFloat(document.getElementById('position-x').value);
+    const posY = parseFloat(document.getElementById('position-y').value);
+    const comOffsetX = parseFloat(document.getElementById('com-offset-x').value);
+    const comOffsetY = parseFloat(document.getElementById('com-offset-y').value);
+    const group = parseInt(document.getElementById('collision-group').value);
+    const category = parseInt(document.getElementById('collision-category').value);
+    const mask = parseInt(document.getElementById('collision-mask').value);
 
-            Body.setAngle(selectedObject, angleDeg * (Math.PI / 180));
-            selectedObject.restitution = restitution;
-            selectedObject.friction = friction;
-            Body.setDensity(selectedObject, density);
-            Body.setPosition(selectedObject, { x: posX, y: posY });
-            Body.setCentre(selectedObject, { x: comOffsetX, y: comOffsetY }, true);
-            
-            if (!isNaN(group)) selectedObject.collisionFilter.group = group;
-            if (!isNaN(category)) selectedObject.collisionFilter.category = category;
-            if (!isNaN(mask)) selectedObject.collisionFilter.mask = mask;
+    Body.setAngle(selectedObject, angleDeg * (Math.PI / 180));
+    selectedObject.restitution = restitution;
+    selectedObject.friction = friction;
+    
+    // --- FIX: Directly set density and mass ---
+    selectedObject.density = density;
+    Body.setMass(selectedObject, selectedObject.density * selectedObject.area);
 
-            if (selectedObject.circleRadius) {
-                const newRadius = parseFloat(document.getElementById('radius').value);
-                const oldRadius = selectedObject.circleRadius;
-                if (oldRadius > 0) Body.scale(selectedObject, newRadius / oldRadius, newRadius / oldRadius);
-            } else {
-                const newWidth = parseFloat(document.getElementById('width').value);
-                const newHeight = parseFloat(document.getElementById('height').value);
-                const oldWidth = selectedObject.bounds.max.x - selectedObject.bounds.min.x;
-                const oldHeight = selectedObject.bounds.max.y - selectedObject.bounds.min.y;
-                if (oldWidth > 0 && oldHeight > 0) Body.scale(selectedObject, newWidth / oldWidth, newHeight / oldHeight);
-            }
-            updateEditorLabels();
-        }
+
+    Body.setPosition(selectedObject, { x: posX, y: posY });
+    Body.setCentre(selectedObject, { x: comOffsetX, y: comOffsetY }); // Corrected this in the previous response
+
+    if (!isNaN(group)) selectedObject.collisionFilter.group = group;
+    if (!isNaN(category)) selectedObject.collisionFilter.category = category;
+    if (!isNaN(mask)) selectedObject.collisionFilter.mask = mask;
+
+    if (selectedObject.circleRadius) {
+        const newRadius = parseFloat(document.getElementById('radius').value);
+        const oldRadius = selectedObject.circleRadius;
+        if (oldRadius > 0) Body.scale(selectedObject, newRadius / oldRadius, newRadius / oldRadius);
+    } else {
+        const newWidth = parseFloat(document.getElementById('width').value);
+        const newHeight = parseFloat(document.getElementById('height').value);
+        const oldWidth = selectedObject.bounds.max.x - selectedObject.bounds.min.x;
+        const oldHeight = selectedObject.bounds.max.y - selectedObject.bounds.min.y;
+        if (oldWidth > 0 && oldHeight > 0) Body.scale(selectedObject, newWidth / oldWidth, newHeight / oldHeight);
+    }
+    updateEditorLabels();
+}
 
         function updateEditorLabels() {
             if (selectedObject) {
@@ -456,13 +461,12 @@
             updateEditorLabels();
         }
 
-        // --- WORLD CONTROLS LOGIC ---
-        gravitySlider.addEventListener('input', function() {
-            const gravityScale = parseFloat(this.value);
-            engine.gravity.scale = gravityScale;
-            gravityValueSpan.textContent = gravityScale.toFixed(2);
-        });
-
+            // --- WORLD CONTROLS LOGIC ---
+    gravitySlider.addEventListener('input', function() {
+    const gravityValue = parseFloat(this.value);
+    engine.gravity.y = gravityValue; // Change this from .scale to .y
+    gravityValueSpan.textContent = gravityValue.toFixed(2);
+});
 
         // --- SELECTION AND MAIN LOGIC ---
         const distToSegment = (p, v, w) => {
