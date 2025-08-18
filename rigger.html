@@ -155,6 +155,22 @@
             text-align: center;
             margin-bottom: 10px;
         }
+        .message-box {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: #444; color: #fff; padding: 15px 30px; border-radius: 8px;
+            z-index: 1001; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+        #load-modal textarea {
+            width: 100%;
+            min-height: 150px;
+            background: #111;
+            color: #eee;
+            border: 1px solid #555;
+            padding: 5px;
+            border-radius: 5px;
+            font-family: monospace;
+            resize: vertical;
+        }
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -163,7 +179,10 @@
 <body>
     <div id="editor-panel" class="ui-panel">
         <h3 id="ui-title">New Constraint</h3>
-
+        <div class="control-group">
+            <label>Select Existing Constraint</label>
+            <select id="existing-constraint-list"></select>
+        </div>
         <div id="composite-editor">
             <input type="text" id="composite-name-input" placeholder="Composite Name">
             <button id="delete-composite-btn" class="delete-button" style="margin-top: 0;">Delete Composite</button>
@@ -281,6 +300,11 @@
             <button id="add-composite-btn" style="margin-top: 10px;">Add New Composite</button>
         </div>
         <div class="control-group">
+            <h3>Save/Load</h3>
+            <button id="save-composite-btn">Save Selected</button>
+            <button id="load-composite-btn" style="margin-top: 10px;">Load Composite</button>
+        </div>
+        <div class="control-group">
             <h3>Mode</h3>
             <div class="checkbox-group">
                 <label for="build-mode-checkbox">Build Mode</label>
@@ -296,6 +320,7 @@
         </div>
     </div>
 
+    <!-- Modals -->
     <div id="delete-modal" class="modal-overlay">
         <div class="modal-content">
             <p id="modal-text">You are about to delete this.</p>
@@ -306,11 +331,26 @@
         </div>
     </div>
 
+    <div id="load-modal" class="modal-overlay">
+        <div class="modal-content">
+            <p>Paste composite JSON string below:</p>
+            <textarea id="load-textarea"></textarea>
+            <div class="modal-buttons">
+                <button id="confirm-load">Load</button>
+                <button id="deny-load">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message Box -->
+    <div id="copy-message" class="message-box"></div>
+
     <div class="instructions">
         <b>Left-click:</b> Select | <b>Right-click:</b> Select for constraint | <b>Drag:</b> Move
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script src="./libs/matter-tools.js"></script>
     <script>
         // --- SETUP ---
         const { Engine, Render, Runner, Bodies, Body, Composite, Constraint, Mouse, MouseConstraint, Events, Query, Vector, Vertices } = Matter;
@@ -320,7 +360,7 @@
         Render.run(render);
         const runner = Runner.create();
         Runner.run(runner, engine);
-
+        
         // --- SCENE OBJECTS ---
         const initialBodies = [
             Bodies.circle(window.innerWidth / 2 - 200, 200, 30, { render: { fillStyle: '#4285F4' } }),
@@ -353,6 +393,9 @@
         // All composites will be stored in this master composite. This prevents them from being part of the main world.
         const masterComposite = Composite.create({ label: 'Master Composite' });
         world.label = 'World';
+        
+        // --- SERIALIZER SETUP ---
+        const serializer = MatterTools.Serializer.create();
 
         // --- UI ELEMENT REFERENCES ---
         const uiTitle = document.getElementById('ui-title'), 
@@ -366,11 +409,18 @@
               deleteCompositeBtn = document.getElementById('delete-composite-btn');
 
         const deleteModal = document.getElementById('delete-modal'), 
-              modalText = document.getElementById('modal-text');
+              loadModal = document.getElementById('load-modal'),
+              modalText = document.getElementById('modal-text'),
+              loadTextarea = document.getElementById('load-textarea'),
+              copyMessage = document.getElementById('copy-message');
 
         const compositeNameInput = document.getElementById('composite-name-input');
         const compositeList = document.getElementById('composite-list');
         const assignCompositeList = document.getElementById('assign-composite-list');
+
+        // Save/Load Buttons
+        const saveCompositeBtn = document.getElementById('save-composite-btn');
+        const loadCompositeBtn = document.getElementById('load-composite-btn');
 
         // --- WORLD CONTROLS REFERENCES ---
         const gravitySlider = document.getElementById('gravity-slider');
@@ -387,6 +437,10 @@
             deleteCompositeBtn.style.display = 'none';
             assignToCompositeSection.style.display = 'none';
             
+            // Toggle save button based on selection
+            saveCompositeBtn.disabled = !selectedComposite;
+            saveCompositeBtn.style.opacity = selectedComposite ? 1 : 0.5;
+
             switch(mode) {
                 case 'new':
                     uiTitle.textContent = "New Constraint";
@@ -428,7 +482,26 @@
             }
             Composite.add(world, newBody);
         });
+        // --- CONSTRAINTS LOGIC --- ADDED BY THEGINKO
+        function updateConstraintList() {
+    const constraintsList = document.getElementById('existing-constraint-list');
+    constraintsList.innerHTML = '<option value="new">Create New...</option>';
+    const allConstraints = Composite.allConstraints(world).concat(Composite.allConstraints(masterComposite));
 
+    allConstraints.forEach(c => {
+        const option = document.createElement('option');
+        option.value = c.id;
+        option.textContent = `Constraint ${c.id}`;
+        constraintsList.appendChild(option);
+    });
+
+    // Set the dropdown to the currently selected constraint, if one exists
+    if (selectedConstraint) {
+        constraintsList.value = selectedConstraint.id;
+    } else {
+        constraintsList.value = 'new';
+    }
+}
         // --- COMPOSITES LOGIC ---
         function updateCompositeLists() {
             // Clear existing lists
@@ -505,6 +578,52 @@
                 }
             }
         });
+
+        // --- SAVE/LOAD LOGIC ---
+        function saveComposite() {
+            if (!selectedComposite) {
+                showMessage("No composite selected to save.", 'error');
+                return;
+            }
+            try {
+                const jsonString = MatterTools.Serializer.serialise(serializer, selectedComposite, 2);
+                navigator.clipboard.writeText(jsonString).then(() => {
+                    showMessage("Composite JSON copied to clipboard!");
+                }, (err) => {
+                    showMessage("Failed to copy JSON to clipboard.", 'error');
+                    console.error("Could not copy text: ", err);
+                });
+            } catch (err) {
+                showMessage("Failed to serialize composite.", 'error');
+                console.error("Serialization error: ", err);
+            }
+        }
+
+        function loadComposite() {
+            const jsonString = loadTextarea.value;
+            try {
+                const newComposite = MatterTools.Serializer.parse(jsonString);
+                Composite.add(masterComposite, newComposite);
+                updateCompositeLists();
+                loadModal.style.display = 'none';
+                showMessage("Composite loaded successfully!");
+            } catch (err) {
+                showMessage("Invalid JSON string. Please check the format.", 'error');
+                console.error("Deserialization error: ", err);
+            }
+        }
+
+        function showMessage(text, type = 'success') {
+            copyMessage.textContent = text;
+            copyMessage.style.backgroundColor = type === 'error' ? '#DB4437' : '#0F9D58';
+            copyMessage.style.opacity = 1;
+            setTimeout(() => { copyMessage.style.opacity = 0; }, 2000);
+        }
+
+        saveCompositeBtn.addEventListener('click', saveComposite);
+        loadCompositeBtn.addEventListener('click', () => { loadModal.style.display = 'flex'; });
+        document.getElementById('confirm-load').addEventListener('click', loadComposite);
+        document.getElementById('deny-load').addEventListener('click', () => { loadModal.style.display = 'none'; });
 
         // --- BUILD MODE LOGIC ---
         document.getElementById('build-mode-checkbox').addEventListener('change', (e) => {
@@ -818,6 +937,7 @@
             showEditor('new'); 
             updateSelectionVisuals();
             updateCompositeLists();
+            updateConstraintList(); 
         };
 
         let isDragging = false;
@@ -1009,11 +1129,29 @@
             render.canvas.width = window.innerWidth; render.canvas.height = window.innerHeight;
             render.options.width = window.innerWidth; render.options.height = window.innerHeight;
         });
+        //EVENT LISTENER FOR CONSTRAINTS
+        document.getElementById('existing-constraint-list').addEventListener('change', (e) => {
+    const constraintId = e.target.value;
 
+    if (constraintId === 'new') {
+        deselectAll();
+    } else {
+        const allConstraints = Composite.allConstraints(world).concat(Composite.allConstraints(masterComposite));
+        const selectedItem = allConstraints.find(c => c.id == constraintId);
+        if (selectedItem) {
+            deselectAll();
+            selectedConstraint = selectedItem;
+            showEditor('constraint');
+            populateEditor(selectedConstraint);
+            updateSelectionVisuals();
+        }
+    }
+});
         // --- INITIALIZATION ---
         window.onload = function() {
             Composite.add(world, masterComposite); // Add master composite to the world
             updateCompositeLists();
+            updateConstraintList();
         };
 
     </script>
