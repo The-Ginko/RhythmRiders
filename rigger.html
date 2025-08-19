@@ -171,6 +171,51 @@
             font-family: monospace;
             resize: vertical;
         }
+        //styling for controls sliders with range control 
+        .slider-with-controls {
+    margin-bottom: 12px;
+}
+.slider-with-controls label {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+.range-and-controls {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.range-and-controls input[type="range"] {
+    flex-grow: 1;
+    cursor: pointer;
+}
+.range-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.range-controls button {
+    height: 14px;
+    width: 14px;
+    line-height: 0;
+    padding: 0;
+    border-radius: 3px;
+    border: 1px solid #555;
+    background-color: #333;
+    color: #fff;
+    font-size: 10px;
+    cursor: pointer;
+}
+.range-controls button:active {
+    transform: translateY(1px);
+}
+.range-display {
+    font-size: 10px;
+    color: #888;
+    display: block;
+    text-align: right;
+}
     </style>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -261,8 +306,28 @@
                 <input type="range" id="radius" min="10" max="100" step="1" value="30">
             </div>
             <div id="size-editor-rect" style="display: none;">
-                <div class="slider-group"><label for="width">Width: <span id="width-value">50</span></label><input type="range" id="width" min="10" max="200" step="1" value="50"></div>
-                <div class="slider-group"><label for="height">Height: <span id="height-value">50</span></label><input type="range" id="height" min="10" max="200" step="1" value="50"></div>
+                <div class="slider-with-controls">
+                    <label for="width">Width: <span id="width-value">50</span></label>
+                    <div class="range-and-controls">
+                        <input type="range" id="width" min="10" max="200" step="1" value="50">
+                        <div class="range-controls">
+                            <button class="range-up" data-target="width" data-scale="10">▲</button>
+                            <button class="range-down" data-target="width" data-scale="0.1">▼</button>
+                        </div>
+                    </div>
+                    <span class="range-display">Range: 10 - 200</span>
+                </div>
+                <div class="slider-with-controls">
+                    <label for="height">Height: <span id="height-value">50</span></label>
+                    <div class="range-and-controls">
+                        <input type="range" id="height" min="10" max="200" step="1" value="50">
+                        <div class="range-controls">
+                            <button class="range-up" data-target="height" data-scale="10">▲</button>
+                            <button class="range-down" data-target="height" data-scale="0.1">▼</button>
+                            </div>
+                    </div>
+                    <span class="range-display">Range: 10 - 200</span>
+                </div>
             </div>
              <div id="size-editor-polygon" class="slider-group" style="display: none;">
                 <label for="polygon-size">Size: <span id="polygon-size-value">40</span></label>
@@ -564,20 +629,52 @@
         });
         
         document.getElementById('add-to-composite-btn').addEventListener('click', () => {
-            if (selectedObject) {
-                const targetCompositeId = assignCompositeList.value;
-                if (targetCompositeId) {
-                    const targetComposite = Composite.get(masterComposite, targetCompositeId, 'composite');
-                    const parentComposite = Composite.get(world, selectedObject.id, 'body') || Composite.get(masterComposite, selectedObject.id, 'body');
-                    if (parentComposite) {
-                        Composite.move(parentComposite, [selectedObject], targetComposite);
-                    } else {
-                       Composite.move(world, [selectedObject], targetComposite);
+    if (selectedObject) {
+        const targetCompositeId = assignCompositeList.value;
+        if (targetCompositeId && targetCompositeId !== 'none') { // Ensure a composite is selected
+            const targetComposite = Composite.get(masterComposite, targetCompositeId, 'composite');
+            
+            let parentComposite = world; // Assume world is the parent initially
+
+            // Check if the object is directly in the world's bodies
+            if (!world.bodies.includes(selectedObject)) {
+                // If not in world.bodies, search within masterComposite and its sub-composites
+                // Matter.js composites have a 'parent' property referencing their containing composite
+                // We can traverse up the parent chain from the selected object's parent
+                let currentParent = selectedObject.parent;
+                while (currentParent && currentParent !== world) {
+                    if (masterComposite.composites.includes(currentParent)) {
+                        parentComposite = currentParent;
+                        break; // Found the parent composite within masterComposite
                     }
-                    deselectAll();
+                    currentParent = currentParent.parent;
                 }
             }
-        });
+
+            console.log('Assign button clicked. Selected Object:', selectedObject);
+            console.log('Assign Composite List value:', targetCompositeId);
+            console.log('Parent Composite:', parentComposite);
+            console.log('Target Composite:', targetComposite);
+
+            if (parentComposite && targetComposite) { // Ensure both parent and target composites are found
+                 // Check if the selected object is already in the target composite
+                if (!Composite.allBodies(targetComposite).includes(selectedObject)) {
+                     Composite.move(parentComposite, [selectedObject], targetComposite);
+                } else {
+                    console.log('Object is already in the target composite.');
+                     showMessage('Object is already in the selected composite.', 'info');
+                }
+               
+            } else {
+                 showMessage('Please select a composite to assign to.', 'info');
+            }
+            deselectAll();
+        } else {
+             showMessage('Please select a composite to assign to.', 'info');
+        }
+    }
+});
+
 
         // --- SAVE/LOAD LOGIC ---
         function saveComposite() {
@@ -602,7 +699,7 @@
         function loadComposite() {
             const jsonString = loadTextarea.value;
             try {
-                const newComposite = MatterTools.Serializer.parse(jsonString);
+                const newComposite = serializer.parse(jsonString);
                 Composite.add(masterComposite, newComposite);
                 updateCompositeLists();
                 loadModal.style.display = 'none';
@@ -659,7 +756,29 @@
             }
             deleteModal.style.display = 'none';
         });
+        // RANGE SCALING FOR SLIDERS LOGIC AND UPDATE
+        function scaleSliderRange(slider, scaleFactor) {
+    const currentMin = parseFloat(slider.min);
+    const currentMax = parseFloat(slider.max);
+    const currentStep = parseFloat(slider.step);
 
+    let newMin = currentMin * scaleFactor;
+    let newMax = currentMax * scaleFactor;
+    let newStep = currentStep * scaleFactor;
+
+    // Prevent range from collapsing to zero or becoming too small
+    if (newMax < newMin + newStep) {
+        newMax = newMin + newStep;
+    }
+
+    slider.min = newMin;
+    slider.max = newMax;
+    slider.step = newStep;
+
+    // Update the display for the new range
+    const rangeDisplay = slider.closest('.slider-with-controls').querySelector('.range-display');
+    rangeDisplay.textContent = `Range: ${newMin} - ${newMax}`;
+}
         // --- PROPERTY HANDLERS ---
         function setupPropertyHandlers() {
             const inputs = {
@@ -809,6 +928,16 @@
             inputs.constraintPointBY.addEventListener('input', () => {
                 if(selectedConstraint) selectedConstraint.pointB.y = parseFloat(inputs.constraintPointBY.value);
             });
+
+            // Add this section to the bottom of the function
+document.querySelectorAll('.range-and-controls button').forEach(button => {
+    button.addEventListener('click', () => {
+        const sliderId = button.dataset.target;
+        const slider = document.getElementById(sliderId);
+        const scale = parseFloat(button.dataset.scale);
+        scaleSliderRange(slider, scale);
+    });
+});
         }
         setupPropertyHandlers();
 
@@ -854,6 +983,8 @@
                     document.getElementById('size-editor-rect').style.display = 'block';
                     document.getElementById('width').value = body.bounds.max.x - body.bounds.min.x;
                     document.getElementById('height').value = body.bounds.max.y - body.bounds.min.y;
+                    document.querySelector('#size-editor-rect .range-display').textContent = `Range: 10 - 200`;
+                    document.querySelector('#size-editor-rect .range-display').textContent = `Range: 10 - 200`;
                 } else { 
                     document.getElementById('size-editor-polygon').style.display = 'block';
                     const size = Math.sqrt(body.area / (body.vertices.length === 3 ? 0.433 : 1));
@@ -994,117 +1125,116 @@
         });
 
         // --- UNIFIED SELECTION LOGIC ---
-        Events.on(mouseConstraint, 'mousedown', function(event) {
-            if (isBuildMode) return;
+        render.canvas.addEventListener('mousedown', function(event) {
+    if (isBuildMode) return;
 
-            const mousePosition = event.mouse.position;
-            const clickTolerance = 5;
-            
-            // Check if this click is very close to the last one
-            const isSameClick = lastClickPosition.x !== null && 
-                                Vector.magnitude(Vector.sub(mousePosition, lastClickPosition)) < clickTolerance;
+    const mousePosition = { x: event.offsetX, y: event.offsetY };
+    const clickTolerance = 5;
 
-            let candidates = [];
-            
-            // Gather all bodies under the mouse
-            const allBodies = Composite.allBodies(world).concat(Composite.allBodies(masterComposite));
-            const bodiesUnderMouse = Query.point(allBodies, mousePosition);
-            candidates.push(...bodiesUnderMouse);
+    // Check if this click is very close to the last one
+    const isSameClick = lastClickPosition.x !== null && 
+                        Vector.magnitude(Vector.sub(mousePosition, lastClickPosition)) < clickTolerance;
 
-            // Gather all constraints under the mouse
-            const allConstraints = Composite.allConstraints(world).concat(Composite.allConstraints(masterComposite));
-            for (const constraint of allConstraints) {
-                if (!constraint.bodyA || !constraint.bodyB) continue;
-                if (distToSegment(mousePosition, constraint.bodyA.position, constraint.bodyB.position) < 10) {
-                    candidates.push(constraint);
-                }
+    let candidates = [];
+
+    // Gather all bodies under the mouse
+    const allBodies = Composite.allBodies(world).concat(Composite.allBodies(masterComposite));
+    const bodiesUnderMouse = Query.point(allBodies, mousePosition);
+    candidates.push(...bodiesUnderMouse);
+
+    // Gather all constraints under the mouse
+    const allConstraints = Composite.allConstraints(world).concat(Composite.allConstraints(masterComposite));
+    for (const constraint of allConstraints) {
+        if (!constraint.bodyA || !constraint.bodyB) continue;
+        if (distToSegment(mousePosition, constraint.bodyA.position, constraint.bodyB.position) < 10) {
+            candidates.push(constraint);
+        }
+    }
+
+    const filteredCandidates = candidates;
+
+    if (event.button === 0) { // Left-click for selection
+        if (filteredCandidates.length > 0) {
+            if (isSameClick) {
+                candidateIndex = (candidateIndex + 1) % filteredCandidates.length;
+            } else {
+                candidateIndex = 0;
             }
 
-            // Remove walls from candidates
-            const filteredCandidates = candidates.filter(item => !item.isStatic);
-            
-            if (event.mouse.button === 0) { // Left-click for selection
-                if (filteredCandidates.length > 0) {
-                    if (isSameClick) {
-                        candidateIndex = (candidateIndex + 1) % filteredCandidates.length;
-                    } else {
-                        candidateIndex = 0;
-                    }
-                    
-                    const selectedItem = filteredCandidates[candidateIndex];
-                    deselectAll();
-                    
-                    if (selectedItem.type === 'body') {
-                        // Check if the body belongs to a composite
-                        let parentComposite = null;
-                        for (const comp of masterComposite.composites) {
-                            if (Composite.allBodies(comp).some(body => body.id === selectedItem.id)) {
-                                parentComposite = comp;
-                                break;
-                            }
-                        }
+            const selectedItem = filteredCandidates[candidateIndex];
+            deselectAll();
 
-                        if (parentComposite) {
-                            selectedComposite = parentComposite;
-                            showEditor('composite');
-                            compositeNameInput.value = selectedComposite.label;
-                        } else {
-                            selectedObject = selectedItem;
-                            showEditor('object');
-                            populateEditor(selectedObject);
-                        }
-                    } else if (selectedItem.type === 'constraint') {
-                         let parentComposite = null;
-                        for (const comp of masterComposite.composites) {
-                            if (Composite.allConstraints(comp).some(constraint => constraint.id === selectedItem.id)) {
-                                parentComposite = comp;
-                                break;
-                            }
-                        }
-
-                        if (parentComposite) {
-                            selectedComposite = parentComposite;
-                            showEditor('composite');
-                            compositeNameInput.value = selectedComposite.label;
-                        } else {
-                            selectedConstraint = selectedItem;
-                            showEditor('constraint');
-                            populateEditor(selectedConstraint);
-                        }
+            if (selectedItem.type === 'body') {
+                // Check if the body belongs to a composite
+                let parentComposite = null;
+                for (const comp of masterComposite.composites) {
+                    if (Composite.allBodies(comp).some(body => body.id === selectedItem.id)) {
+                        parentComposite = comp;
+                        break;
                     }
+                }
+
+                if (parentComposite) {
+                    selectedComposite = parentComposite;
+                    showEditor('composite');
+                    compositeNameInput.value = selectedComposite.label;
                 } else {
-                    deselectAll();
+                    selectedObject = selectedItem;
+                    showEditor('object');
+                    populateEditor(selectedObject);
                 }
-                
-                lastClickPosition = { x: mousePosition.x, y: mousePosition.y };
-                updateSelectionVisuals();
-
-            } else if (event.mouse.button === 2) { // Right-click for constraints
-                const clickedBodies = Query.point(world.bodies, mousePosition).filter(body => !body.isStatic);
-                if (clickedBodies.length > 0) {
-                    const body = clickedBodies[0];
-                    const index = selectedBodies.indexOf(body);
-                    if (index === -1) {
-                        if (selectedBodies.length < 2) {
-                            selectedBodies.push(body);
-                        }
-                    } else {
-                        selectedBodies.splice(index, 1);
+            } else if (selectedItem.type === 'constraint') {
+                 let parentComposite = null;
+                for (const comp of masterComposite.composites) {
+                    if (Composite.allConstraints(comp).some(constraint => constraint.id === selectedItem.id)) {
+                        parentComposite = comp;
+                        break;
                     }
+                }
 
-                    if (selectedBodies.length === 2) {
-                        const newConstraint = Constraint.create({
-                            bodyA: selectedBodies[0], bodyB: selectedBodies[1],
-                            stiffness: 0.1, damping: 0.05, length: 100,
-                            render: { strokeStyle: '#999', lineWidth: 2 }
-                        });
-                        Composite.add(world, newConstraint);
-                        selectedBodies = [];
-                    }
-                    updateSelectionVisuals();
+                if (parentComposite) {
+                    selectedComposite = parentComposite;
+                    showEditor('composite');
+                    compositeNameInput.value = selectedComposite.label;
+                } else {
+                    selectedConstraint = selectedItem;
+                    showEditor('constraint');
+                    populateEditor(selectedConstraint);
                 }
             }
-        });
+        } else {
+            deselectAll();
+        }
+
+        lastClickPosition = { x: mousePosition.x, y: mousePosition.y };
+        updateSelectionVisuals();
+
+    } else if (event.button === 2) { // Right-click for constraints
+        const clickedBodies = Query.point(world.bodies, mousePosition);
+        if (clickedBodies.length > 0) {
+            const body = clickedBodies[0];
+            const index = selectedBodies.indexOf(body);
+            if (index === -1) {
+                if (selectedBodies.length < 2) {
+                    selectedBodies.push(body);
+                }
+            } else {
+                selectedBodies.splice(index, 1);
+            }
+
+            if (selectedBodies.length === 2) {
+                const newConstraint = Constraint.create({
+                    bodyA: selectedBodies[0], bodyB: selectedBodies[1],
+                    stiffness: 0.01, damping: 0.05, length: 100,
+                    render: { strokeStyle: '#999', lineWidth: 2 }
+                });
+                Composite.add(world, newConstraint);
+                selectedBodies = [];
+            }
+            updateSelectionVisuals();
+        }
+    }
+});
 
         // --- CUSTOM RENDERING ---
         Events.on(render, 'afterRender', function() {
