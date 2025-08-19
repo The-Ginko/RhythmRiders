@@ -228,9 +228,12 @@
             <label>Select Existing Constraint</label>
             <select id="existing-constraint-list"></select>
         </div>
+        
         <div id="composite-editor">
             <input type="text" id="composite-name-input" placeholder="Composite Name">
-            <button id="delete-composite-btn" class="delete-button" style="margin-top: 0;">Delete Composite</button>
+            <p id="composite-editor-message" style="display:none; font-size: 12px; margin: 10px 0;">Object is selected. To manipulate it, you must first remove it from this composite.</p>
+            <button id="remove-from-composite-btn" class="delete-button" style="display: none; margin-top: 0;">Remove Selected Object</button>
+            <button id="delete-composite-btn" class="delete-button">Delete Composite</button>
         </div>
 
         <div id="constraint-editor">
@@ -507,29 +510,36 @@
             saveCompositeBtn.style.opacity = selectedComposite ? 1 : 0.5;
 
             switch(mode) {
-                case 'new':
-                    uiTitle.textContent = "New Constraint";
-                    constraintEditor.style.display = 'block';
-                    break;
-                case 'constraint':
-                    uiTitle.textContent = "Edit Constraint";
-                    constraintEditor.style.display = 'block';
-                    deleteConstraintBtn.style.display = 'block';
-                    assignToCompositeSection.style.display = 'block';
-                    break;
-                case 'object':
-                    uiTitle.textContent = "Edit Object";
-                    objectEditor.style.display = 'block';
-                    deleteObjectBtn.style.display = 'block';
-                    assignToCompositeSection.style.display = 'block';
-                    break;
-                case 'composite':
-                    uiTitle.textContent = "Edit Composite";
-                    compositeEditor.style.display = 'block';
-                    deleteCompositeBtn.style.display = 'block';
-                    break;
-            }
-        }
+        case 'new':
+            uiTitle.textContent = "New Constraint";
+            constraintEditor.style.display = 'block';
+            break;
+        case 'constraint':
+            uiTitle.textContent = "Edit Constraint";
+            constraintEditor.style.display = 'block';
+            deleteConstraintBtn.style.display = 'block';
+            assignToCompositeSection.style.display = 'block';
+            break;
+        case 'object':
+            uiTitle.textContent = "Edit Object";
+            objectEditor.style.display = 'block';
+            deleteObjectBtn.style.display = 'block';
+            assignToCompositeSection.style.display = 'block';
+            break;
+        case 'composite':
+            uiTitle.textContent = "Edit Composite";
+            compositeEditor.style.display = 'block';
+            deleteCompositeBtn.style.display = 'block';
+            break;
+        case 'composite-child':
+            uiTitle.textContent = "Edit Composite";
+            compositeEditor.style.display = 'block';
+            document.getElementById('remove-from-composite-btn').style.display = 'block';
+            document.getElementById('composite-editor-message').style.display = 'block';
+            deleteCompositeBtn.style.display = 'none';
+            break;
+    }
+}
 
         // --- ADD OBJECT LOGIC ---
         document.getElementById('add-object-btn').addEventListener('click', () => {
@@ -604,7 +614,32 @@
                 deselectAll();
             }
         }
-
+        function removeFromComposite() {
+    if (selectedObject) {
+        const parentComposite = selectedObject.parent;
+        if (parentComposite && parentComposite !== world) {
+            Composite.remove(parentComposite, selectedObject);
+            Composite.add(world, selectedObject);
+            deselectAll();
+            showMessage("Object removed from composite.", 'success');
+        } else {
+            showMessage("Object is not in a composite.", 'error');
+        }
+    } else if (selectedConstraint) {
+         const parentComposite = selectedConstraint.parent;
+         if (parentComposite && parentComposite !== world) {
+             Composite.remove(parentComposite, selectedConstraint);
+             Composite.add(world, selectedConstraint);
+             deselectAll();
+             showMessage("Constraint removed from composite.", 'success');
+         } else {
+             showMessage("Constraint is not in a composite.", 'error');
+         }
+    } else {
+         showMessage("No object or constraint selected to remove.", 'error');
+    }
+}
+document.getElementById('remove-from-composite-btn').addEventListener('click', removeFromComposite);
         document.getElementById('add-composite-btn').addEventListener('click', addComposite);
 
         compositeList.addEventListener('change', (e) => {
@@ -697,18 +732,25 @@
         }
 
         function loadComposite() {
-            const jsonString = loadTextarea.value;
-            try {
-                const newComposite = serializer.parse(jsonString);
-                Composite.add(masterComposite, newComposite);
-                updateCompositeLists();
-                loadModal.style.display = 'none';
-                showMessage("Composite loaded successfully!");
-            } catch (err) {
-                showMessage("Invalid JSON string. Please check the format.", 'error');
-                console.error("Deserialization error: ", err);
-            }
+    const jsonString = loadTextarea.value;
+    try {
+        const newComposite = serializer.parse(jsonString);
+
+        // Fix the collision issue by setting the group to 0
+        const bodiesInComposite = Composite.allBodies(newComposite);
+        for (const body of bodiesInComposite) {
+            body.collisionFilter.group = 0;
         }
+
+        Composite.add(masterComposite, newComposite);
+        updateCompositeLists();
+        loadModal.style.display = 'none';
+        showMessage("Composite loaded successfully!");
+    } catch (err) {
+        showMessage("Invalid JSON string. Please check the format.", 'error');
+        console.error("Deserialization error: ", err);
+    }
+}
 
         function showMessage(text, type = 'success') {
             copyMessage.textContent = text;
@@ -1061,15 +1103,15 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
         };
         
         const deselectAll = () => {
-            selectedBodies = []; 
-            selectedConstraint = null; 
-            selectedObject = null;
-            selectedComposite = null;
-            showEditor('new'); 
-            updateSelectionVisuals();
-            updateCompositeLists();
-            updateConstraintList(); 
-        };
+    selectedBodies = []; 
+    selectedConstraint = null; 
+    selectedObject = null;
+    selectedComposite = null;
+    showEditor('new'); 
+    updateSelectionVisuals();
+    updateCompositeLists();
+    updateConstraintList();
+};
 
         let isDragging = false;
         const dragThreshold = 5;
@@ -1165,14 +1207,46 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
             deselectAll();
 
             if (selectedItem.type === 'body') {
-                // Check if the body belongs to a composite
-                let parentComposite = null;
-                for (const comp of masterComposite.composites) {
-                    if (Composite.allBodies(comp).some(body => body.id === selectedItem.id)) {
-                        parentComposite = comp;
-                        break;
-                    }
-                }
+    // Check if the body belongs to a composite
+    let parentComposite = null;
+    for (const comp of masterComposite.composites) {
+        if (Composite.allBodies(comp).some(body => body.id === selectedItem.id)) {
+            parentComposite = comp;
+            break;
+        }
+    }
+
+    if (parentComposite) {
+        selectedComposite = parentComposite;
+        selectedObject = selectedItem; // Keep reference to the child object
+        showEditor('composite-child'); // Show the new UI for a child object
+        compositeNameInput.value = selectedComposite.label;
+    } else {
+        selectedObject = selectedItem;
+        showEditor('object');
+        populateEditor(selectedObject);
+    }
+} else if (selectedItem.type === 'constraint') {
+    // Check if the constraint belongs to a composite
+     let parentComposite = null;
+    for (const comp of masterComposite.composites) {
+        if (Composite.allConstraints(comp).some(constraint => constraint.id === selectedItem.id)) {
+            parentComposite = comp;
+            break;
+        }
+    }
+
+    if (parentComposite) {
+        selectedComposite = parentComposite;
+        selectedConstraint = selectedItem; // Keep reference to the child constraint
+        showEditor('composite-child'); // Show the new UI for a child constraint
+        compositeNameInput.value = selectedComposite.label;
+    } else {
+        selectedConstraint = selectedItem;
+        showEditor('constraint');
+        populateEditor(selectedConstraint);
+    }
+}
 
                 if (parentComposite) {
                     selectedComposite = parentComposite;
@@ -1208,8 +1282,8 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
 
         lastClickPosition = { x: mousePosition.x, y: mousePosition.y };
         updateSelectionVisuals();
-
-    } else if (event.button === 2) { // Right-click for constraints
+    } 
+        else if (event.button === 2) { // Right-click for constraints
         const clickedBodies = Query.point(world.bodies, mousePosition);
         if (clickedBodies.length > 0) {
             const body = clickedBodies[0];
