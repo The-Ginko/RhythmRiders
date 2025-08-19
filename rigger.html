@@ -231,11 +231,29 @@
         
         <div id="composite-editor">
             <input type="text" id="composite-name-input" placeholder="Composite Name">
+            <div class="input-group">
+                <label>ID: <span id="composite-id-display" style="font-weight: normal;">N/A</span></label>
+            </div>
+            <div class="input-group">
+                <label>Translate (x, y)</label>
+                <div>
+                    <input type="number" id="composite-translate-x" step="10">
+                    <input type="number" id="composite-translate-y" step="10">
+                </div>
+            </div>
+            <div class="slider-group">
+                <label for="composite-rotation">Rotate: <span id="composite-rotation-value">0</span>°</label>
+                <input type="range" id="composite-rotation" min="-180" max="180" step="1" value="0">
+            </div>
+            <div class="slider-group">
+                <label for="composite-scale">Scale: <span id="composite-scale-value">1.00</span>x</label>
+                <input type="range" id="composite-scale" min="0.1" max="5" step="0.01" value="1">
+            </div>
             <p id="composite-editor-message" style="display:none; font-size: 12px; margin: 10px 0;">Object is selected. To manipulate it, you must first remove it from this composite.</p>
             <button id="remove-from-composite-btn" class="delete-button" style="display: none; margin-top: 0;">Remove Selected Object</button>
             <button id="delete-composite-btn" class="delete-button">Delete Composite</button>
         </div>
-
+    
         <div id="constraint-editor">
             <div class="slider-group">
                 <label for="stiffness">Stiffness: <span id="stiffness-value">0.10</span></label>
@@ -259,15 +277,16 @@
             </div>
             <button id="delete-constraint-btn" class="delete-button" style="display: none;">Delete Constraint</button>
         </div>
-
-        <div id="object-editor" style="display: none;">
-            <div id="assign-to-composite-section">
-                <div class="control-group">
-                    <label>Assign to Composite</label>
-                    <select id="assign-composite-list"></select>
-                    <button id="add-to-composite-btn" style="margin-top: 10px;">Assign</button>
-                </div>
+    
+        <div id="assign-to-composite-section">
+            <div class="control-group">
+                <label>Assign to Composite</label>
+                <select id="assign-composite-list"></select>
+                <button id="add-to-composite-btn" style="margin-top: 10px;">Assign</button>
             </div>
+        </div>
+    
+        <div id="object-editor" style="display: none;">
              <div class="checkbox-group">
                 <label for="is-static">Static</label>
                 <input type="checkbox" id="is-static">
@@ -367,6 +386,7 @@
             <select id="composite-list"></select>
             <button id="add-composite-btn" style="margin-top: 10px;">Add New Composite</button>
         </div>
+        
         <div class="control-group">
             <h3>Save/Load</h3>
             <button id="save-composite-btn">Save Selected</button>
@@ -421,7 +441,7 @@
     <script src="./libs/matter-tools.js"></script>
     <script>
         // --- SETUP ---
-        const { Engine, Render, Runner, Bodies, Body, Composite, Constraint, Mouse, MouseConstraint, Events, Query, Vector, Vertices } = Matter;
+        const { Engine, Render, Runner, Bodies, Body, Bounds, Composite, Constraint, Mouse, MouseConstraint, Events, Query, Vector, Vertices } = Matter;
         const engine = Engine.create();
         const world = engine.world;
         const render = Render.create({ element: document.body, engine: engine, options: { width: window.innerWidth, height: window.innerHeight, wireframes: false, background: '#1a1a1a' } });
@@ -496,20 +516,21 @@
         gravityValueSpan.textContent = parseFloat(gravitySlider.value).toFixed(2);
 
         // --- UI LOGIC ---
-        function showEditor(mode) {
-            constraintEditor.style.display = 'none';
-            objectEditor.style.display = 'none';
-            compositeEditor.style.display = 'none';
-            deleteConstraintBtn.style.display = 'none';
-            deleteObjectBtn.style.display = 'none';
-            deleteCompositeBtn.style.display = 'none';
-            assignToCompositeSection.style.display = 'none';
-            
-            // Toggle save button based on selection
-            saveCompositeBtn.disabled = !selectedComposite;
-            saveCompositeBtn.style.opacity = selectedComposite ? 1 : 0.5;
+        // Replace this entire function
+function showEditor(mode) {
+    constraintEditor.style.display = 'none';
+    objectEditor.style.display = 'none';
+    compositeEditor.style.display = 'none';
+    deleteConstraintBtn.style.display = 'none';
+    deleteObjectBtn.style.display = 'none';
+    deleteCompositeBtn.style.display = 'none';
+    assignToCompositeSection.style.display = 'none'; // Hide by default
+    
+    // Toggle save button based on selection
+    saveCompositeBtn.disabled = !selectedComposite;
+    saveCompositeBtn.style.opacity = selectedComposite ? 1 : 0.5;
 
-            switch(mode) {
+    switch(mode) {
         case 'new':
             uiTitle.textContent = "New Constraint";
             constraintEditor.style.display = 'block';
@@ -518,13 +539,13 @@
             uiTitle.textContent = "Edit Constraint";
             constraintEditor.style.display = 'block';
             deleteConstraintBtn.style.display = 'block';
-            assignToCompositeSection.style.display = 'block';
+            assignToCompositeSection.style.display = 'block'; // Now this will work
             break;
         case 'object':
             uiTitle.textContent = "Edit Object";
             objectEditor.style.display = 'block';
             deleteObjectBtn.style.display = 'block';
-            assignToCompositeSection.style.display = 'block';
+            assignToCompositeSection.style.display = 'block'; // This still works
             break;
         case 'composite':
             uiTitle.textContent = "Edit Composite";
@@ -614,27 +635,30 @@
                 deselectAll();
             }
         }
-        function removeFromComposite() {
-    if (selectedObject) {
-        const parentComposite = selectedObject.parent;
+        
+ // Replace this entire function
+function removeFromComposite() {
+    const itemToRemove = selectedObject || selectedConstraint;
+
+    if (itemToRemove) {
+        const parentComposite = findParentComposite(itemToRemove);
+
         if (parentComposite && parentComposite !== world) {
-            Composite.remove(parentComposite, selectedObject);
-            Composite.add(world, selectedObject);
+            // START: Corrected Logic
+            if (itemToRemove.type === 'body') {
+                Composite.removeBody(parentComposite, itemToRemove);
+                Composite.addBody(world, itemToRemove);
+            } else if (itemToRemove.type === 'constraint') {
+                Composite.removeConstraint(parentComposite, itemToRemove);
+                Composite.addConstraint(world, itemToRemove);
+            }
+            // END: Corrected Logic
+            
             deselectAll();
-            showMessage("Object removed from composite.", 'success');
+            showMessage(`${itemToRemove.type.charAt(0).toUpperCase() + itemToRemove.type.slice(1)} removed from composite.`, 'success');
         } else {
-            showMessage("Object is not in a composite.", 'error');
+            showMessage('Item is not in a user-created composite.', 'error');
         }
-    } else if (selectedConstraint) {
-         const parentComposite = selectedConstraint.parent;
-         if (parentComposite && parentComposite !== world) {
-             Composite.remove(parentComposite, selectedConstraint);
-             Composite.add(world, selectedConstraint);
-             deselectAll();
-             showMessage("Constraint removed from composite.", 'success');
-         } else {
-             showMessage("Constraint is not in a composite.", 'error');
-         }
     } else {
          showMessage("No object or constraint selected to remove.", 'error');
     }
@@ -643,18 +667,25 @@ document.getElementById('remove-from-composite-btn').addEventListener('click', r
         document.getElementById('add-composite-btn').addEventListener('click', addComposite);
 
         compositeList.addEventListener('change', (e) => {
-            const compositeId = e.target.value;
-            if (compositeId === 'none') {
-                selectedComposite = null;
-            } else {
-                selectedComposite = Composite.get(masterComposite, compositeId, 'composite');
-            }
-            showEditor('composite');
-            if (selectedComposite) {
-                compositeNameInput.value = selectedComposite.label;
-            }
-            updateSelectionVisuals();
-        });
+    const compositeId = e.target.value;
+    if (compositeId === 'none') {
+        selectedComposite = null;
+        // When deselecting, you might want to revert to a default view
+        showEditor('new'); 
+    } else {
+        selectedComposite = Composite.get(masterComposite, compositeId, 'composite');
+    }
+    
+    // This 'if' block now correctly handles showing the editor and populating the fields
+    if (selectedComposite) {
+        showEditor('composite');
+        compositeNameInput.value = selectedComposite.label;
+        // This is the line that was added to populate the ID
+        document.getElementById('composite-id-display').textContent = selectedComposite.id; 
+    }
+    
+    updateSelectionVisuals();
+});
 
         compositeNameInput.addEventListener('input', (e) => {
             if (selectedComposite) {
@@ -663,50 +694,43 @@ document.getElementById('remove-from-composite-btn').addEventListener('click', r
             }
         });
         
-        document.getElementById('add-to-composite-btn').addEventListener('click', () => {
-    if (selectedObject) {
-        const targetCompositeId = assignCompositeList.value;
-        if (targetCompositeId && targetCompositeId !== 'none') { // Ensure a composite is selected
-            const targetComposite = Composite.get(masterComposite, targetCompositeId, 'composite');
-            
-            let parentComposite = world; // Assume world is the parent initially
+        
+   // Replace this entire event listener
+document.getElementById('add-to-composite-btn').addEventListener('click', () => {
+    const targetCompositeId = assignCompositeList.value;
+    const itemToMove = selectedObject || selectedConstraint;
 
-            // Check if the object is directly in the world's bodies
-            if (!world.bodies.includes(selectedObject)) {
-                // If not in world.bodies, search within masterComposite and its sub-composites
-                // Matter.js composites have a 'parent' property referencing their containing composite
-                // We can traverse up the parent chain from the selected object's parent
-                let currentParent = selectedObject.parent;
-                while (currentParent && currentParent !== world) {
-                    if (masterComposite.composites.includes(currentParent)) {
-                        parentComposite = currentParent;
-                        break; // Found the parent composite within masterComposite
-                    }
-                    currentParent = currentParent.parent;
+    if (!itemToMove) {
+        showMessage('No object or constraint selected.', 'error');
+        return;
+    }
+
+    if (targetCompositeId && targetCompositeId !== 'none') {
+        const targetComposite = Composite.get(masterComposite, targetCompositeId, 'composite');
+        const parentComposite = findParentComposite(itemToMove);
+
+        if (parentComposite && targetComposite) {
+            if (parentComposite !== targetComposite) {
+                // START: Corrected Logic
+                if (itemToMove.type === 'body') {
+                    Composite.removeBody(parentComposite, itemToMove);
+                    Composite.addBody(targetComposite, itemToMove);
+                } else if (itemToMove.type === 'constraint') {
+                    Composite.removeConstraint(parentComposite, itemToMove);
+                    Composite.addConstraint(targetComposite, itemToMove);
                 }
-            }
+                // END: Corrected Logic
 
-            console.log('Assign button clicked. Selected Object:', selectedObject);
-            console.log('Assign Composite List value:', targetCompositeId);
-            console.log('Parent Composite:', parentComposite);
-            console.log('Target Composite:', targetComposite);
-
-            if (parentComposite && targetComposite) { // Ensure both parent and target composites are found
-                 // Check if the selected object is already in the target composite
-                if (!Composite.allBodies(targetComposite).includes(selectedObject)) {
-                     Composite.move(parentComposite, [selectedObject], targetComposite);
-                } else {
-                    console.log('Object is already in the target composite.');
-                     showMessage('Object is already in the selected composite.', 'info');
-                }
-               
+                showMessage(`${itemToMove.type.charAt(0).toUpperCase() + itemToMove.type.slice(1)} assigned to composite.`, 'success');
+                deselectAll();
             } else {
-                 showMessage('Please select a composite to assign to.', 'info');
+                showMessage('Item is already in the selected composite.', 'info');
             }
-            deselectAll();
         } else {
-             showMessage('Please select a composite to assign to.', 'info');
+             showMessage('Could not find parent or target composite.', 'error');
         }
+    } else {
+        showMessage('Please select a composite to assign to.', 'info');
     }
 });
 
@@ -821,166 +845,139 @@ document.getElementById('remove-from-composite-btn').addEventListener('click', r
     const rangeDisplay = slider.closest('.slider-with-controls').querySelector('.range-display');
     rangeDisplay.textContent = `Range: ${newMin} - ${newMax}`;
 }
-        // --- PROPERTY HANDLERS ---
-        function setupPropertyHandlers() {
-            const inputs = {
-                isStatic: document.getElementById('is-static'),
-                angle: document.getElementById('angle'),
-                restitution: document.getElementById('restitution'),
-                friction: document.getElementById('friction'),
-                frictionStatic: document.getElementById('friction-static'),
-                frictionAir: document.getElementById('friction-air'),
-                density: document.getElementById('density'),
-                posX: document.getElementById('position-x'),
-                posY: document.getElementById('position-y'),
-                comX: document.getElementById('com-offset-x'),
-                comY: document.getElementById('com-offset-y'),
-                radius: document.getElementById('radius'),
-                width: document.getElementById('width'),
-                height: document.getElementById('height'),
-                polygonSize: document.getElementById('polygon-size'),
-                group: document.getElementById('collision-group'),
-                category: document.getElementById('collision-category'),
-                mask: document.getElementById('collision-mask'),
-                stiffness: document.getElementById('stiffness'),
-                damping: document.getElementById('damping'),
-                length: document.getElementById('length'),
-                constraintPointAX: document.getElementById('constraint-point-ax'),
-                constraintPointAY: document.getElementById('constraint-point-ay'),
-                constraintPointBX: document.getElementById('constraint-point-bx'),
-                constraintPointBY: document.getElementById('constraint-point-by')
-            };
+// --- START: New Helper Function ---
+function findParentComposite(item) {
+    // Bodies and Composites have a .parent property
+    if (item.parent) {
+        return item.parent;
+    }
 
-            inputs.isStatic.addEventListener('change', () => {
-                if (selectedObject) Body.setStatic(selectedObject, inputs.isStatic.checked);
-            });
-            inputs.angle.addEventListener('input', () => {
-                if (selectedObject) Body.setAngle(selectedObject, parseFloat(inputs.angle.value) * (Math.PI / 180));
-                updateEditorLabels();
-            });
-            inputs.restitution.addEventListener('input', () => {
-                if (selectedObject) selectedObject.restitution = parseFloat(inputs.restitution.value);
-                updateEditorLabels();
-            });
-            inputs.friction.addEventListener('input', () => {
-                if (selectedObject) selectedObject.friction = parseFloat(inputs.friction.value);
-                updateEditorLabels();
-            });
-            inputs.frictionStatic.addEventListener('input', () => {
-                if (selectedObject) selectedObject.frictionStatic = parseFloat(inputs.frictionStatic.value);
-                updateEditorLabels();
-            });
-            inputs.frictionAir.addEventListener('input', () => {
-                if (selectedObject) selectedObject.frictionAir = parseFloat(inputs.frictionAir.value);
-                updateEditorLabels();
-            });
-            inputs.density.addEventListener('input', () => {
-                if (selectedObject) Body.setDensity(selectedObject, parseFloat(inputs.density.value));
-                updateEditorLabels();
-            });
-            inputs.posX.addEventListener('input', () => {
-                if (selectedObject) Body.setPosition(selectedObject, { x: parseFloat(inputs.posX.value), y: selectedObject.position.y });
-                updateEditorLabels();
-            });
-            inputs.posY.addEventListener('input', () => {
-                if (selectedObject) Body.setPosition(selectedObject, { x: selectedObject.position.x, y: parseFloat(inputs.posY.value) });
-                updateEditorLabels();
-            });
-             inputs.comX.addEventListener('input', () => {
-                if (selectedObject) {
-                    const newOffsetX = parseFloat(inputs.comX.value) || 0;
-                    const currentOffsetY = parseFloat(inputs.comY.value) || 0;
-                    Body.setCentre(selectedObject, { x: newOffsetX, y: currentOffsetY }, true);
-                }
-            });
-            inputs.comY.addEventListener('input', () => {
-                if (selectedObject) {
-                    const newOffsetY = parseFloat(inputs.comY.value) || 0;
-                    const currentOffsetX = parseFloat(inputs.comX.value) || 0;
-                    Body.setCentre(selectedObject, { x: currentOffsetX, y: newOffsetY }, true);
-                }
-            });
-            inputs.radius.addEventListener('input', () => {
-                if (selectedObject && selectedObject.circleRadius) {
-                    const newRadius = parseFloat(inputs.radius.value);
-                    const oldRadius = selectedObject.circleRadius;
-                    if (oldRadius > 0) Body.scale(selectedObject, newRadius / oldRadius, newRadius / oldRadius);
-                }
-                updateEditorLabels();
-            });
-            inputs.width.addEventListener('input', () => {
-                if (selectedObject && !selectedObject.circleRadius) {
-                    const newWidth = parseFloat(inputs.width.value);
-                    const oldWidth = selectedObject.bounds.max.x - selectedObject.bounds.min.x;
-                    if (oldWidth > 0) Body.scale(selectedObject, newWidth / oldWidth, 1);
-                }
-                updateEditorLabels();
-            });
-            inputs.height.addEventListener('input', () => {
-                if (selectedObject && !selectedObject.circleRadius) {
-                    const newHeight = parseFloat(inputs.height.value);
-                    const oldHeight = selectedObject.bounds.max.y - selectedObject.bounds.min.y;
-                    if (oldHeight > 0) Body.scale(selectedObject, 1, newHeight / oldHeight);
-                }
-                updateEditorLabels();
-            });
-            inputs.polygonSize.addEventListener('input', () => {
-                if (selectedObject && !selectedObject.circleRadius && selectedObject.vertices.length !== 4) {
-                    const newSize = parseFloat(inputs.polygonSize.value);
-                    const currentSize = Math.sqrt(selectedObject.area / (selectedObject.vertices.length === 3 ? 0.433 : 1));
-                    const scaleFactor = newSize / currentSize;
-                    if (currentSize > 0 && isFinite(scaleFactor)) {
-                        Body.scale(selectedObject, scaleFactor, scaleFactor);
-                    }
-                }
-                updateEditorLabels();
-            });
-            inputs.group.addEventListener('input', () => {
-                if (selectedObject && !isNaN(parseInt(inputs.group.value))) selectedObject.collisionFilter.group = parseInt(inputs.group.value);
-            });
-            inputs.category.addEventListener('input', () => {
-                if (selectedObject && !isNaN(parseInt(inputs.category.value))) selectedObject.collisionFilter.category = parseInt(inputs.category.value);
-            });
-            inputs.mask.addEventListener('input', () => {
-                if (selectedObject && !isNaN(parseInt(inputs.mask.value))) selectedObject.collisionFilter.mask = parseInt(inputs.mask.value);
-            });
-
-            // Constraint Listeners
-            inputs.stiffness.addEventListener('input', () => {
-                if(selectedConstraint) selectedConstraint.stiffness = parseFloat(inputs.stiffness.value);
-                updateEditorLabels();
-            });
-            inputs.damping.addEventListener('input', () => {
-                if(selectedConstraint) selectedConstraint.damping = parseFloat(inputs.damping.value);
-                updateEditorLabels();
-            });
-            inputs.length.addEventListener('input', () => {
-                if(selectedConstraint) selectedConstraint.length = parseFloat(inputs.length.value);
-                updateEditorLabels();
-            });
-            inputs.constraintPointAX.addEventListener('input', () => {
-                if(selectedConstraint) selectedConstraint.pointA.x = parseFloat(inputs.constraintPointAX.value);
-            });
-            inputs.constraintPointAY.addEventListener('input', () => {
-                if(selectedConstraint) selectedConstraint.pointA.y = parseFloat(inputs.constraintPointAY.value);
-            });
-            inputs.constraintPointBX.addEventListener('input', () => {
-                if(selectedConstraint) selectedConstraint.pointB.x = parseFloat(inputs.constraintPointBX.value);
-            });
-            inputs.constraintPointBY.addEventListener('input', () => {
-                if(selectedConstraint) selectedConstraint.pointB.y = parseFloat(inputs.constraintPointBY.value);
-            });
-
-            // Add this section to the bottom of the function
-document.querySelectorAll('.range-and-controls button').forEach(button => {
-    button.addEventListener('click', () => {
-        const sliderId = button.dataset.target;
-        const slider = document.getElementById(sliderId);
-        const scale = parseFloat(button.dataset.scale);
-        scaleSliderRange(slider, scale);
-    });
-});
+    // Constraints do not, so we must search for them
+    if (item.type === 'constraint') {
+        // Check the main world first
+        if (world.constraints.includes(item)) {
+            return world;
         }
+        // Check all user-created composites
+        for (const comp of masterComposite.composites) {
+            if (Composite.allConstraints(comp).includes(item)) {
+                return comp;
+            }
+        }
+    }
+    
+    // Fallback in case a body loses its parent reference
+    if (item.type === 'body') {
+        if (world.bodies.includes(item)) {
+            return world;
+        }
+        for (const comp of masterComposite.composites) {
+             if (Composite.allBodies(comp).includes(item)) {
+                return comp;
+            }
+        }
+    }
+
+    // If it's not found anywhere else, it must be in the world
+    return world;
+}
+// --- END: New Helper Function ---
+        // --- PROPERTY HANDLERS ---
+function setupPropertyHandlers() {
+    const inputs = {
+        // ... (the existing inputs object remains unchanged)
+        isStatic: document.getElementById('is-static'),
+        angle: document.getElementById('angle'),
+        restitution: document.getElementById('restitution'),
+        friction: document.getElementById('friction'),
+        frictionStatic: document.getElementById('friction-static'),
+        frictionAir: document.getElementById('friction-air'),
+        density: document.getElementById('density'),
+        posX: document.getElementById('position-x'),
+        posY: document.getElementById('position-y'),
+        comX: document.getElementById('com-offset-x'),
+        comY: document.getElementById('com-offset-y'),
+        radius: document.getElementById('radius'),
+        width: document.getElementById('width'),
+        height: document.getElementById('height'),
+        polygonSize: document.getElementById('polygon-size'),
+        group: document.getElementById('collision-group'),
+        category: document.getElementById('collision-category'),
+        mask: document.getElementById('collision-mask'),
+        stiffness: document.getElementById('stiffness'),
+        damping: document.getElementById('damping'),
+        length: document.getElementById('length'),
+        constraintPointAX: document.getElementById('constraint-point-ax'),
+        constraintPointAY: document.getElementById('constraint-point-ay'),
+        constraintPointBX: document.getElementById('constraint-point-bx'),
+        constraintPointBY: document.getElementById('constraint-point-by'),
+
+        // START: Add new composite inputs
+        compTranslateX: document.getElementById('composite-translate-x'),
+        compTranslateY: document.getElementById('composite-translate-y'),
+        compRotation: document.getElementById('composite-rotation'),
+        compScale: document.getElementById('composite-scale')
+        // END: Add new composite inputs
+    };
+
+    // ... (all existing event listeners for bodies and constraints remain unchanged)
+    inputs.isStatic.addEventListener('change', () => { if (selectedObject) Body.setStatic(selectedObject, inputs.isStatic.checked); });
+    inputs.angle.addEventListener('input', () => { if (selectedObject) Body.setAngle(selectedObject, parseFloat(inputs.angle.value) * (Math.PI / 180)); updateEditorLabels(); });
+    // ... etc. ...
+    
+    // START: Add new event listeners for composite controls
+    const handleCompositeTranslate = () => {
+        if (selectedComposite) {
+            const dx = parseFloat(inputs.compTranslateX.value) || 0;
+            const dy = parseFloat(inputs.compTranslateY.value) || 0;
+            if (dx !== 0 || dy !== 0) {
+                Composite.translate(selectedComposite, { x: dx, y: dy });
+                // Reset inputs after applying translation
+                inputs.compTranslateX.value = 0;
+                inputs.compTranslateY.value = 0;
+            }
+        }
+    };
+    inputs.compTranslateX.addEventListener('change', handleCompositeTranslate);
+    inputs.compTranslateY.addEventListener('change', handleCompositeTranslate);
+
+    inputs.compRotation.addEventListener('input', () => {
+        if (selectedComposite) {
+            const bounds = getCompositeBounds(selectedComposite);
+            if (!bounds) return;
+            const center = { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 };
+            const newAngle = parseFloat(inputs.compRotation.value) * (Math.PI / 180);
+            const currentAngle = selectedComposite.angle || 0;
+            Composite.rotate(selectedComposite, newAngle - currentAngle, center);
+            selectedComposite.angle = newAngle; // Store current angle
+            updateEditorLabels();
+        }
+    });
+
+     inputs.compScale.addEventListener('input', () => {
+        if (selectedComposite) {
+            const bounds = getCompositeBounds(selectedComposite);
+            if (!bounds) return;
+            const center = { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 };
+            const newScale = parseFloat(inputs.compScale.value);
+            const currentScale = selectedComposite.scale || 1;
+            const scaleFactor = newScale / currentScale;
+            Composite.scale(selectedComposite, scaleFactor, scaleFactor, center);
+            selectedComposite.scale = newScale; // Store current scale
+            updateEditorLabels();
+        }
+    });
+    // END: Add new event listeners
+
+    document.querySelectorAll('.range-and-controls button').forEach(button => {
+        button.addEventListener('click', () => {
+            const sliderId = button.dataset.target;
+            const slider = document.getElementById(sliderId);
+            const scale = parseFloat(button.dataset.scale);
+            scaleSliderRange(slider, scale);
+        });
+    });
+}
         setupPropertyHandlers();
 
         function updateEditorLabels() {
@@ -1006,68 +1003,84 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
                 document.getElementById('damping-value').textContent = selectedConstraint.damping.toFixed(3);
                 document.getElementById('length-value').textContent = Math.round(selectedConstraint.length);
             }
+            if (selectedComposite) {
+                document.getElementById('composite-rotation-value').textContent = Math.round(parseFloat(document.getElementById('composite-rotation').value));
+                document.getElementById('composite-scale-value').textContent = parseFloat(document.getElementById('composite-scale').value).toFixed(2);
+}
         }
 
-        function populateEditor(item) {
-            if (item.type === 'body') {
-                const body = item;
-                const isCircle = body.circleRadius > 0;
-                const isRectangle = !isCircle && body.vertices.length === 4;
-                
-                document.getElementById('size-editor-circle').style.display = 'none';
-                document.getElementById('size-editor-rect').style.display = 'none';
-                document.getElementById('size-editor-polygon').style.display = 'none';
+        // Replace the existing populateEditor function with this one
+function populateEditor(item) {
+    if (item.type === 'body') {
+        // ... (this part remains unchanged)
+        const body = item;
+        const isCircle = body.circleRadius > 0;
+        const isRectangle = !isCircle && body.vertices.length === 4;
+        
+        document.getElementById('size-editor-circle').style.display = 'none';
+        document.getElementById('size-editor-rect').style.display = 'none';
+        document.getElementById('size-editor-polygon').style.display = 'none';
 
-                if (isCircle) {
-                    document.getElementById('size-editor-circle').style.display = 'block';
-                    document.getElementById('radius').value = body.circleRadius;
-                } else if (isRectangle) {
-                    document.getElementById('size-editor-rect').style.display = 'block';
-                    document.getElementById('width').value = body.bounds.max.x - body.bounds.min.x;
-                    document.getElementById('height').value = body.bounds.max.y - body.bounds.min.y;
-                    document.querySelector('#size-editor-rect .range-display').textContent = `Range: 10 - 200`;
-                    document.querySelector('#size-editor-rect .range-display').textContent = `Range: 10 - 200`;
-                } else { 
-                    document.getElementById('size-editor-polygon').style.display = 'block';
-                    const size = Math.sqrt(body.area / (body.vertices.length === 3 ? 0.433 : 1));
-                    document.getElementById('polygon-size').value = size;
-                }
-
-                document.getElementById('is-static').checked = body.isStatic;
-                document.getElementById('angle').value = Math.round(body.angle * (180 / Math.PI)) % 360;
-                document.getElementById('restitution').value = body.restitution;
-                document.getElementById('friction').value = body.friction;
-                document.getElementById('friction-static').value = body.frictionStatic;
-                document.getElementById('friction-air').value = body.frictionAir;
-                document.getElementById('density').value = body.density;
-                document.getElementById('position-x').value = Math.round(body.position.x);
-                document.getElementById('position-y').value = Math.round(body.position.y);
-
-                const geometricCenter = Vertices.centre(body.vertices);
-                const offsetX = body.position.x - geometricCenter.x;
-                const offsetY = body.position.y - geometricCenter.y;
-                document.getElementById('com-offset-x').value = Math.round(offsetX);
-                document.getElementById('com-offset-y').value = Math.round(offsetY);
-                
-                document.getElementById('collision-group').value = body.collisionFilter.group;
-                document.getElementById('collision-category').value = body.collisionFilter.category;
-                document.getElementById('collision-mask').value = body.collisionFilter.mask;
-                
-                assignToCompositeSection.style.display = 'block';
-            } else if (item.type === 'constraint') {
-                const constraint = item;
-                document.getElementById('stiffness').value = constraint.stiffness;
-                document.getElementById('damping').value = constraint.damping;
-                document.getElementById('length').value = constraint.length;
-                document.getElementById('constraint-point-ax').value = constraint.pointA.x;
-                document.getElementById('constraint-point-ay').value = constraint.pointA.y;
-                document.getElementById('constraint-point-bx').value = constraint.pointB.x;
-                document.getElementById('constraint-point-by').value = constraint.pointB.y;
-
-                assignToCompositeSection.style.display = 'block';
-            }
-            updateEditorLabels();
+        if (isCircle) {
+            document.getElementById('size-editor-circle').style.display = 'block';
+            document.getElementById('radius').value = body.circleRadius;
+        } else if (isRectangle) {
+            document.getElementById('size-editor-rect').style.display = 'block';
+            document.getElementById('width').value = body.bounds.max.x - body.bounds.min.x;
+            document.getElementById('height').value = body.bounds.max.y - body.bounds.min.y;
+            document.querySelector('#size-editor-rect .range-display').textContent = `Range: 10 - 200`;
+            document.querySelector('#size-editor-rect .range-display').textContent = `Range: 10 - 200`;
+        } else { 
+            document.getElementById('size-editor-polygon').style.display = 'block';
+            const size = Math.sqrt(body.area / (body.vertices.length === 3 ? 0.433 : 1));
+            document.getElementById('polygon-size').value = size;
         }
+
+        document.getElementById('is-static').checked = body.isStatic;
+        document.getElementById('angle').value = Math.round(body.angle * (180 / Math.PI)) % 360;
+        document.getElementById('restitution').value = body.restitution;
+        document.getElementById('friction').value = body.friction;
+        document.getElementById('friction-static').value = body.frictionStatic;
+        document.getElementById('friction-air').value = body.frictionAir;
+        document.getElementById('density').value = body.density;
+        document.getElementById('position-x').value = Math.round(body.position.x);
+        document.getElementById('position-y').value = Math.round(body.position.y);
+
+        const geometricCenter = Vertices.centre(body.vertices);
+        const offsetX = body.position.x - geometricCenter.x;
+        const offsetY = body.position.y - geometricCenter.y;
+        document.getElementById('com-offset-x').value = Math.round(offsetX);
+        document.getElementById('com-offset-y').value = Math.round(offsetY);
+        
+        document.getElementById('collision-group').value = body.collisionFilter.group;
+        document.getElementById('collision-category').value = body.collisionFilter.category;
+        document.getElementById('collision-mask').value = body.collisionFilter.mask;
+        
+        assignToCompositeSection.style.display = 'block';
+    } else if (item.type === 'constraint') {
+        // ... (this part remains unchanged)
+        const constraint = item;
+        document.getElementById('stiffness').value = constraint.stiffness;
+        document.getElementById('damping').value = constraint.damping;
+        document.getElementById('length').value = constraint.length;
+        document.getElementById('constraint-point-ax').value = constraint.pointA.x;
+        document.getElementById('constraint-point-ay').value = constraint.pointA.y;
+        document.getElementById('constraint-point-bx').value = constraint.pointB.x;
+        document.getElementById('constraint-point-by').value = constraint.pointB.y;
+
+        assignToCompositeSection.style.display = 'block';
+    } else if (item.type === 'composite') {
+        // START: New logic for populating composite editor
+        const composite = item;
+        document.getElementById('composite-id-display').textContent = composite.id;
+        document.getElementById('composite-translate-x').value = 0;
+        document.getElementById('composite-translate-y').value = 0;
+        document.getElementById('composite-rotation').value = 0;
+        document.getElementById('composite-scale').value = 1;
+        // END: New logic for populating composite editor
+    }
+    updateEditorLabels();
+}
 
         gravitySlider.addEventListener('input', function() {
             const gravityValue = parseFloat(this.value);
@@ -1082,6 +1095,17 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
             const projection = { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) };
             return Vector.magnitude(Vector.sub(p, projection));
         };
+
+        // Add this new helper function
+    const getCompositeBounds = (composite) => {
+        const bodies = Composite.allBodies(composite);
+        if (bodies.length === 0) {
+        return null;
+    }
+        const vertices = [];
+        bodies.forEach(body => vertices.push(...body.vertices));
+        return Bounds.create(vertices);
+};
 
         const updateSelectionVisuals = () => {
             // Reset all borders
@@ -1167,7 +1191,7 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
         });
 
         // --- UNIFIED SELECTION LOGIC ---
-        render.canvas.addEventListener('mousedown', function(event) {
+   render.canvas.addEventListener('mousedown', function(event) {
     if (isBuildMode) return;
 
     const mousePosition = { x: event.offsetX, y: event.offsetY };
@@ -1207,58 +1231,30 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
             deselectAll();
 
             if (selectedItem.type === 'body') {
-    // Check if the body belongs to a composite
-    let parentComposite = null;
-    for (const comp of masterComposite.composites) {
-        if (Composite.allBodies(comp).some(body => body.id === selectedItem.id)) {
-            parentComposite = comp;
-            break;
-        }
-    }
-
-    if (parentComposite) {
-        selectedComposite = parentComposite;
-        selectedObject = selectedItem; // Keep reference to the child object
-        showEditor('composite-child'); // Show the new UI for a child object
-        compositeNameInput.value = selectedComposite.label;
-    } else {
-        selectedObject = selectedItem;
-        showEditor('object');
-        populateEditor(selectedObject);
-    }
-} else if (selectedItem.type === 'constraint') {
-    // Check if the constraint belongs to a composite
-     let parentComposite = null;
-    for (const comp of masterComposite.composites) {
-        if (Composite.allConstraints(comp).some(constraint => constraint.id === selectedItem.id)) {
-            parentComposite = comp;
-            break;
-        }
-    }
-
-    if (parentComposite) {
-        selectedComposite = parentComposite;
-        selectedConstraint = selectedItem; // Keep reference to the child constraint
-        showEditor('composite-child'); // Show the new UI for a child constraint
-        compositeNameInput.value = selectedComposite.label;
-    } else {
-        selectedConstraint = selectedItem;
-        showEditor('constraint');
-        populateEditor(selectedConstraint);
-    }
-}
+                // Check if the body belongs to a composite
+                let parentComposite = null;
+                for (const comp of masterComposite.composites) {
+                    if (Composite.allBodies(comp).some(body => body.id === selectedItem.id)) {
+                        parentComposite = comp;
+                        break;
+                    }
+                }
 
                 if (parentComposite) {
                     selectedComposite = parentComposite;
-                    showEditor('composite');
+                    selectedObject = selectedItem; // Keep reference to the child object
+                    showEditor('composite-child'); // Show the new UI for a child object
                     compositeNameInput.value = selectedComposite.label;
+                    // --- FIX IS HERE ---
+                    document.getElementById('composite-id-display').textContent = selectedComposite.id;
                 } else {
                     selectedObject = selectedItem;
                     showEditor('object');
                     populateEditor(selectedObject);
                 }
             } else if (selectedItem.type === 'constraint') {
-                 let parentComposite = null;
+                // Check if the constraint belongs to a composite
+                let parentComposite = null;
                 for (const comp of masterComposite.composites) {
                     if (Composite.allConstraints(comp).some(constraint => constraint.id === selectedItem.id)) {
                         parentComposite = comp;
@@ -1268,8 +1264,11 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
 
                 if (parentComposite) {
                     selectedComposite = parentComposite;
-                    showEditor('composite');
+                    selectedConstraint = selectedItem; // Keep reference to the child constraint
+                    showEditor('composite-child'); // Show the new UI for a child constraint
                     compositeNameInput.value = selectedComposite.label;
+                    // --- AND FIX IS HERE ---
+                    document.getElementById('composite-id-display').textContent = selectedComposite.id;
                 } else {
                     selectedConstraint = selectedItem;
                     showEditor('constraint');
@@ -1283,7 +1282,7 @@ document.querySelectorAll('.range-and-controls button').forEach(button => {
         lastClickPosition = { x: mousePosition.x, y: mousePosition.y };
         updateSelectionVisuals();
     } 
-        else if (event.button === 2) { // Right-click for constraints
+    else if (event.button === 2) { // Right-click for constraints
         const clickedBodies = Query.point(world.bodies, mousePosition);
         if (clickedBodies.length > 0) {
             const body = clickedBodies[0];
