@@ -815,11 +815,16 @@ document.getElementById('add-to-composite-btn').addEventListener('click', () => 
     try {
         const newComposite = serializer.parse(jsonString);
 
-        // Fix the collision issue by setting the group to 0
-        const bodiesInComposite = Composite.allBodies(newComposite);
-        for (const body of bodiesInComposite) {
-            body.collisionFilter.group = 0;
-        }
+        // Iterate through all parts of the new composite
+        Composite.allBodies(newComposite).forEach(body => {
+            // Re-apply the original collision group setting
+            // The Matter.js engine needs this to re-initialize properly after deserialization.
+            Body.set(body, 'collisionFilter', { 
+                group: body.collisionFilter.group,
+                category: body.collisionFilter.category,
+                mask: body.collisionFilter.mask
+            });
+        });
 
         Composite.add(masterComposite, newComposite);
         updateCompositeLists();
