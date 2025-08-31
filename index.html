@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rhythm Riders - Physics Demo</title>
+    <title>Rhythm Riders - Physics Demo (v43)</title>
     <style>
         body {
             margin: 0;
@@ -20,49 +20,88 @@
             display: block;
             background-color: #1a1a2e;
         }
-        .controls {
+        .ui-panel {
             position: absolute;
-            top: 20px;
             left: 50%;
             transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.5);
+            background: rgba(0, 0, 0, 0.7);
             padding: 15px 25px;
             border-radius: 10px;
             border: 1px solid #ff00ff;
             box-shadow: 0 0 15px #ff00ff;
             text-align: center;
         }
-        .controls h1 {
-            margin: 0 0 10px 0;
+        .controls {
+            top: 20px;
+        }
+        .tuning-menu {
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            display: none; /* Hidden by default */
+        }
+        .tuning-menu h2 {
+            margin: 0 0 15px 0;
             color: #00ffff;
-            font-size: 1.5em;
         }
-        .controls p {
-            margin: 5px;
-            font-size: 1em;
+        .tuning-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
         }
-        .controls span {
-            display: inline-block;
-            background: #333;
-            color: #fff;
-            padding: 2px 8px;
-            border-radius: 4px;
-            border: 1px solid #555;
+        .tuning-row label {
+            flex-basis: 40%;
+            text-align: left;
+        }
+        .tuning-row input {
+            flex-basis: 50%;
+        }
+        .tuning-row span {
+            flex-basis: 10%;
+            text-align: right;
+            font-weight: bold;
+            color: #ffff00;
         }
     </style>
 </head>
 <body>
-    <div class="controls">
-        <h1>Rhythm Riders - Physics Demo</h1>
+    <div class="ui-panel controls">
+        <h1>Rhythm Riders - v43 (Stable Baseline)</h1>
         <p><span>W</span> / <span>Up</span> - Accelerate | <span>S</span> / <span>Down</span> - Brake/Reverse</p>
-        <p><span>A</span> / <span>Left</span> - Lean Back | <span>D</span> / <span>Right</span> - Lean Forward</p>
+        <p><span>A</span> / <span>Left</span> - Lean Back | <span>D</span> / <span>Right</span> - Lean Forward | <span>P</span> - Pause/Tune</p>
     </div>
+
+    <div id="tuningMenu" class="ui-panel tuning-menu">
+        <h2>Tuning Menu (Paused)</h2>
+        <div class="tuning-row">
+            <label for="maxThrottle">Max Throttle:</label>
+            <input type="range" id="maxThrottle" min="0.001" max="0.02" step="0.0005">
+            <span id="maxThrottleValue">0.009</span>
+        </div>
+        <div class="tuning-row">
+            <label for="kineticFriction">Kinetic Friction:</label>
+            <input type="range" id="kineticFriction" min="0.1" max="0.9" step="0.05">
+            <span id="kineticFrictionValue">0.4</span>
+        </div>
+        <div class="tuning-row">
+            <label for="balanceStrength">Balance Strength:</label>
+            <input type="range" id="balanceStrength" min="0" max="0.00005" step="0.000001">
+            <span id="balanceStrengthValue">0.00001</span>
+        </div>
+        <div class="tuning-row">
+            <label for="weightShift">Weight Shift:</label>
+            <input type="range" id="weightShift" min="0" max="0.01" step="0.0005">
+            <span id="weightShiftValue">0.005</span>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.0/pixi.min.js"></script>
     <script>
         // --- Setup ---
         const {
-            Engine, Render, Runner, World, Bodies, Body, Composite, Constraint, Vector, Events
+            Engine, World, Bodies, Body, Composite, Vector, Query, Events, Runner
         } = Matter;
 
         // --- PIXI Setup ---
@@ -75,286 +114,341 @@
         });
         document.body.appendChild(app.view);
 
+        const worldContainer = new PIXI.Container();
+        app.stage.addChild(worldContainer);
+
         // --- Matter.js Engine Setup ---
         const engine = Engine.create();
         const world = engine.world;
         engine.gravity.y = 1;
+        
+        engine.positionIterations = 20;
+        engine.velocityIterations = 16;
 
-        // This object will hold PIXI.Graphics for each Matter body
-        const graphicsMap = new Map();
+        const groundBodies = []; 
 
         // --- Game State & Controls ---
         const keys = {};
-        let rider, bike;
+        let bike;
+        let bikeContainer; 
+        let centerOfGravityMarker;
         let isAirborne = false;
-        const RIDER_GROUP = Body.nextGroup(true);
+        let isPaused = false;
+        let runner; 
+        
+        let currentThrottle = 0;
+        const throttleRampUp = 0.0005;
+
+        // --- Tunable Physics Variables ---
+        let maxThrottle = 0.009;
+        let kineticFriction = 0.4;
+        let balanceStrength = 0.00001;
+        let weightShiftStrength = 0.005;
+
+        const staticFriction = 0.9;
+        let isBurningOut = false;
+
+        // --- Background Stars ---
+        function createBackgroundStars() {
+            const starContainer = new PIXI.Container();
+            for (let i = 0; i < 200; i++) {
+                const star = new PIXI.Graphics();
+                star.beginFill(0xffffff, Math.random() * 0.8 + 0.2);
+                star.drawCircle(0, 0, Math.random() * 1.5 + 0.5);
+                star.endFill();
+                star.x = (Math.random() - 0.5) * 4000;
+                star.y = (Math.random() - 0.5) * 2000;
+                starContainer.addChild(star);
+            }
+            worldContainer.addChildAt(starContainer, 0);
+        }
 
         // --- Ground & Track Creation ---
-        function createGround() {
-            const groundSegments = [];
-            let x = -2000;
-            let y = window.innerHeight * 0.9;
-            let segmentLength = 200;
+        function createGround(spawnX) {
+            let currentX = -2000;
+            let currentY = window.innerHeight * 0.9;
+            const roadThickness = 10;
+            let spawnY = 0;
 
-            // Generate a long, varied track
             for (let i = 0; i < 100; i++) {
+                const segmentLength = 200 + Math.random() * 100;
                 const heightChange = (Math.random() - 0.5) * 200;
-                const nextX = x + segmentLength + Math.random() * 100;
-                const nextY = y + heightChange;
+                const nextX = currentX + segmentLength;
+                const nextY = currentY + heightChange;
 
-                const segmentVertices = [
-                    { x: x, y: y },
-                    { x: nextX, y: nextY },
-                    { x: nextX, y: window.innerHeight + 50 },
-                    { x: x, y: window.innerHeight + 50 }
-                ];
+                if (spawnX >= currentX && spawnX < nextX) {
+                    const slope = (nextY - currentY) / (nextX - currentX);
+                    spawnY = currentY + (spawnX - currentX) * slope;
+                }
 
-                const groundSegment = Bodies.fromVertices(
-                    (x + nextX) / 2,
-                    (y + nextY + window.innerHeight + 50) / 2,
-                    [segmentVertices], {
-                        isStatic: true,
-                        friction: 1.0,
-                        restitution: 0,
-                        render: { visible: false } // We'll render with PIXI
-                    }
-                );
-                World.add(world, groundSegment);
+                const angle = Math.atan2(nextY - currentY, nextX - currentX);
+                const length = Math.sqrt(Math.pow(nextX - currentX, 2) + Math.pow(nextY - currentY, 2));
                 
-                // Create PIXI graphic for the segment
+                const centerX = currentX + (nextX - currentX) / 2;
+                const centerY = currentY + (nextY - currentY) / 2;
+
+                const groundSegment = Bodies.rectangle(centerX, centerY, length, roadThickness, {
+                    isStatic: true,
+                    angle: angle,
+                    friction: 1.0,
+                    restitution: 0
+                });
+                
+                World.add(world, groundSegment);
+                groundBodies.push(groundSegment);
+                
                 const g = new PIXI.Graphics();
                 g.beginFill(0x0c0c1e);
                 g.lineStyle(4, 0x00ffff, 1);
-                g.moveTo(x, y);
-                g.lineTo(nextX, nextY);
-                g.lineTo(nextX, window.innerHeight + 50);
-                g.lineTo(x, window.innerHeight + 50);
-                g.closePath();
+                g.drawRect(-length / 2, -roadThickness / 2, length, roadThickness);
                 g.endFill();
-                app.stage.addChild(g);
+                g.position.set(centerX, centerY);
+                g.rotation = angle;
+                worldContainer.addChild(g);
                 
-                x = nextX;
-                y = nextY;
+                currentX = nextX;
+                currentY = nextY;
             }
+            return spawnY;
         }
 
-        // --- Rider and Bike Creation ---
-        function createRiderAndBike(x, y) {
-            // --- Bike Parts ---
-            const chassis = Bodies.rectangle(x, y, 80, 20, { 
-                collisionFilter: { group: RIDER_GROUP },
-                density: 0.01 
+        // --- Rigid Bike Creation ---
+        function createRigidBike(x, y) {
+            const chassisVertices = [
+                {x: -50, y: 10}, {x: 50, y: 15}, {x: 55, y: 0}, 
+                {x: 20, y: -20}, {x: -30, y: -20}, {x: -45, y: 0}
+            ];
+            const density = 0.002;
+            
+            const chassis = Bodies.fromVertices(x, y + 15, [chassisVertices], { density: density * 1.5 });
+            const rearWheel = Bodies.circle(x - 45, y + 25, 25, { friction: staticFriction, restitution: 0.3, density: density * 2 });
+            const frontWheel = Bodies.circle(x + 45, y + 25, 25, { friction: 0.05, restitution: 0.1, density: density });
+            
+            const torso = Bodies.rectangle(x - 5, y - 10, 20, 40, { density: density / 2, angle: Math.PI / 2.2 });
+            const head = Bodies.circle(x + 25, y - 25, 12, { density: density / 2 });
+            const upperLeg = Bodies.rectangle(x - 25, y + 5, 15, 25, { density: density / 2, angle: -Math.PI / 6 });
+            const lowerLeg = Bodies.rectangle(x - 30, y + 25, 15, 25, { 
+                density: density * 1.5,
+                angle: -Math.PI / 4
             });
-            const rearWheel = Bodies.circle(x - 40, y + 20, 20, {
-                collisionFilter: { group: RIDER_GROUP },
-                friction: 0.9,
+            const arm = Bodies.rectangle(x + 25, y - 10, 40, 10, {
+                density: density / 2, 
+                angle: Math.PI / 20
+            });
+
+
+            bike = Body.create({
+                parts: [chassis, rearWheel, frontWheel, torso, head, upperLeg, lowerLeg, arm],
+                friction: 0.8,
                 restitution: 0.1,
-                density: 0.01
-            });
-            const frontWheel = Bodies.circle(x + 40, y + 20, 20, {
-                collisionFilter: { group: RIDER_GROUP },
-                friction: 0.9,
-                restitution: 0.1,
-                density: 0.01
+                frictionAir: 0.005,
             });
 
-            // Suspension constraints
-            const rearSuspension = Constraint.create({
-                bodyA: chassis, bodyB: rearWheel,
-                pointA: { x: -40, y: 5 },
-                stiffness: 0.1, damping: 0.1, length: 30
-            });
-             const frontSuspension = Constraint.create({
-                bodyA: chassis, bodyB: frontWheel,
-                pointA: { x: 40, y: 5 },
-                stiffness: 0.1, damping: 0.1, length: 30
-            });
-
-            bike = Composite.create({ label: 'Bike' });
-            Composite.addBody(bike, chassis);
-            Composite.addBody(bike, rearWheel);
-            Composite.addBody(bike, frontWheel);
-            Composite.addConstraint(bike, rearSuspension);
-            Composite.addConstraint(bike, frontSuspension);
-
-            // --- Rider Parts ---
-            const torso = Bodies.rectangle(x, y - 40, 20, 40, { 
-                collisionFilter: { group: RIDER_GROUP },
-                density: 0.005
-            });
-            const head = Bodies.circle(x, y - 70, 15, {
-                collisionFilter: { group: RIDER_GROUP },
-                density: 0.005
-            });
-
-            // 3-part legs
-            const upperLeg = Bodies.rectangle(x - 10, y - 20, 10, 20, { collisionFilter: { group: RIDER_GROUP } });
-            const lowerLeg = Bodies.rectangle(x - 10, y, 10, 20, { collisionFilter: { group: RIDER_GROUP } });
-            const foot = Bodies.rectangle(x - 10, y + 15, 15, 8, { collisionFilter: { group: RIDER_GROUP } });
-
-            rider = Composite.create({ label: 'Rider' });
-            Composite.addBody(rider, torso);
-            Composite.addBody(rider, head);
-            Composite.addBody(rider, upperLeg);
-            Composite.addBody(rider, lowerLeg);
-            Composite.addBody(rider, foot);
-
-            // --- Rider Joints ---
-            const neck = Constraint.create({ bodyA: torso, bodyB: head, pointA: { x: 0, y: -20 }, pointB: { x: 0, y: 10 }, stiffness: 0.8, length: 5 });
-            const hip = Constraint.create({ bodyA: torso, bodyB: upperLeg, pointA: { x: 0, y: 20 }, pointB: { x: 0, y: -10 }, stiffness: 0.8, length: 5 });
-            const knee = Constraint.create({ bodyA: upperLeg, bodyB: lowerLeg, pointA: { x: 0, y: 10 }, pointB: { x: 0, y: -10 }, stiffness: 0.8, length: 5 });
-            const ankle = Constraint.create({ bodyA: lowerLeg, bodyB: foot, pointA: { x: 0, y: 10 }, pointB: { x: 0, y: -4 }, stiffness: 0.8, length: 5 });
-            
-            Composite.addConstraint(rider, neck);
-            Composite.addConstraint(rider, hip);
-            Composite.addConstraint(rider, knee);
-            Composite.addConstraint(rider, ankle);
-
-            // --- Connect Rider to Bike ---
-            const seatConstraint = Constraint.create({
-                bodyA: chassis, bodyB: torso,
-                pointA: { x: -10, y: -10 },
-                pointB: { x: 0, y: 20 },
-                stiffness: 1,
-                damping: 0.1,
-                length: 5
-            });
-
-            // The crucial foot-to-peg constraint
-            const footPegConstraint = Constraint.create({
-                bodyA: chassis, bodyB: foot,
-                pointA: { x: 0, y: 0 },
-                pointB: { x: 0, y: 0 },
-                stiffness: 0.8,
-                length: 20
-            });
-            
-            World.add(world, [bike, rider, seatConstraint, footPegConstraint]);
-            
-            // Store references for later manipulation
-            rider.joints = { hip, knee, ankle };
-            rider.footPegConstraint = footPegConstraint;
-            bike.parts = { chassis, rearWheel, frontWheel };
-        }
-
-        // --- Leg Mechanic Logic ---
-        function updateLegMechanics() {
-            if (!rider || !bike) return;
-
-            const groundContacts = Matter.Query.collides(bike.parts.rearWheel, world.bodies).length > 0 ||
-                                   Matter.Query.collides(bike.parts.frontWheel, world.bodies).length > 0;
-
-            const currentlyAirborne = !groundContacts;
-
-            if (currentlyAirborne && !isAirborne) {
-                // Transition to Airborne
-                isAirborne = true;
-                World.remove(world, rider.footPegConstraint);
-                rider.joints.hip.stiffness = 0.01;
-                rider.joints.knee.stiffness = 0.01;
-                rider.joints.ankle.stiffness = 0.01;
-            } else if (!currentlyAirborne && isAirborne) {
-                // Transition to On-Ground
-                isAirborne = false;
-                World.add(world, rider.footPegConstraint);
-                rider.joints.hip.stiffness = 0.8;
-                rider.joints.knee.stiffness = 0.8;
-                rider.joints.ankle.stiffness = 0.8;
-            }
+            World.add(world, bike);
         }
         
+        // --- Self-Righting Torque ---
+        function applyBalancingTorque() {
+            if (!bike || isAirborne) return;
+            const targetAngle = 0;
+            const currentAngle = bike.angle;
+            const normalizedAngle = ((currentAngle % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+            const angleDifference = targetAngle - normalizedAngle;
+            bike.torque += angleDifference * balanceStrength * bike.inertia;
+        }
+
+        // --- Rider Weight Shift Simulation ---
+        function applyWeightShift() {
+            if (!bike || currentThrottle <= 0) return;
+            const rearPoint = { x: -45, y: 0 };
+            const worldPoint = Vector.add(bike.position, Vector.rotate(rearPoint, bike.angle));
+            const forceMagnitude = currentThrottle * weightShiftStrength * bike.mass;
+            const force = { x: 0, y: forceMagnitude };
+            Body.applyForce(bike, worldPoint, force);
+        }
+
         // --- Player Controls ---
         function handleControls() {
-            if (!rider || !bike) return;
+            if (!bike) return;
+            const rearWheel = bike.parts[2];
+            const frontWheel = bike.parts[3];
+            const rearContacts = Query.collides(rearWheel, groundBodies);
+            const frontContacts = Query.collides(frontWheel, groundBodies);
+            isAirborne = rearContacts.length === 0 && frontContacts.length === 0;
 
-            const chassis = bike.parts.chassis;
-            const rearWheel = bike.parts.rearWheel;
-
-            // Acceleration / Braking
             if (keys['w'] || keys['ArrowUp']) {
-                const force = Vector.rotate({ x: 0.015, y: 0 }, rearWheel.angle);
-                Body.applyForce(rearWheel, rearWheel.position, force);
-            }
-            if (keys['s'] || keys['ArrowDown']) {
-                 const force = Vector.rotate({ x: -0.01, y: 0 }, rearWheel.angle);
-                 Body.applyForce(rearWheel, rearWheel.position, force);
+                currentThrottle = Math.min(maxThrottle, currentThrottle + throttleRampUp);
+            } else {
+                currentThrottle = Math.max(0, currentThrottle - throttleRampUp * 2);
             }
 
-            // Torque for in-air rotation
-            if (keys['a'] || keys['ArrowLeft']) {
-                chassis.torque = -0.3;
+            if (rearContacts.length > 0 && currentThrottle > 0) {
+                const gripThreshold = (bike.mass * engine.gravity.y) * staticFriction;
+                let engineForce = currentThrottle * bike.mass;
+                let appliedForce;
+
+                if (engineForce > gripThreshold) {
+                    isBurningOut = true;
+                    rearWheel.friction = kineticFriction;
+                    appliedForce = (bike.mass * engine.gravity.y) * kineticFriction;
+                } else {
+                    isBurningOut = false;
+                    rearWheel.friction = staticFriction;
+                    appliedForce = engineForce;
+                }
+                const force = Vector.rotate({ x: appliedForce, y: 0 }, bike.angle);
+                Body.applyForce(bike, rearWheel.position, force);
+            } else {
+                rearWheel.friction = staticFriction;
+                isBurningOut = false;
             }
-            if (keys['d'] || keys['ArrowRight']) {
-                chassis.torque = 0.3;
+
+            if (rearContacts.length > 0) {
+                if (keys['s'] || keys['ArrowDown']) {
+                    const forceMagnitude = -0.0025 * bike.mass;
+                    const force = Vector.rotate({ x: forceMagnitude, y: 0 }, bike.angle);
+                    Body.applyForce(bike, rearWheel.position, force);
+                }
+            }
+
+            if (isAirborne) {
+                if (keys['a'] || keys['ArrowLeft']) {
+                    bike.torque = -0.0002 * bike.inertia;
+                }
+                if (keys['d'] || keys['ArrowRight']) {
+                    bike.torque = 0.0002 * bike.inertia;
+                }
             }
         }
 
         // --- PIXI Rendering Logic ---
-        function createPixiGraphicForBody(body) {
-            const g = new PIXI.Graphics();
-            const color = 0xff00ff; // Neon pink
-            const lineColor = 0x00ffff; // Neon cyan
-            
-            g.beginFill(color, 0.3);
-            g.lineStyle(2, lineColor, 1);
-
-            if (body.circleRadius) {
-                g.drawCircle(0, 0, body.circleRadius);
-            } else {
-                const path = body.vertices.map(v => new PIXI.Point(v.x - body.position.x, v.y - body.position.y));
+        function createPixiBikeContainer() {
+            bikeContainer = new PIXI.Container();
+            for (let i = 1; i < bike.parts.length; i++) {
+                const part = bike.parts[i];
+                const g = new PIXI.Graphics();
+                const isRiderPart = i >= 4;
+                const color = isRiderPart ? 0xff00ff : 0x0c0c1e;
+                const lineColor = 0x00ffff;
+                g.beginFill(color, 0.8);
+                g.lineStyle(2, lineColor, 1);
+                const path = part.vertices.map(v => new PIXI.Point(v.x - bike.position.x, v.y - bike.position.y));
                 g.drawPolygon(path);
+                g.endFill();
+                bikeContainer.addChild(g);
             }
-            g.endFill();
-            app.stage.addChild(g);
-            graphicsMap.set(body.id, g);
+            centerOfGravityMarker = new PIXI.Graphics();
+            centerOfGravityMarker.beginFill(0xffff00);
+            centerOfGravityMarker.drawCircle(0, 0, 5);
+            centerOfGravityMarker.endFill();
+            bikeContainer.addChild(centerOfGravityMarker);
+            worldContainer.addChild(bikeContainer);
         }
 
+        // --- Camera Logic ---
         function updatePixiGraphics() {
-            // Update all dynamic bodies
-            for (const body of Composite.allBodies(world)) {
-                if (body.isStatic) continue;
-
-                if (!graphicsMap.has(body.id)) {
-                    createPixiGraphicForBody(body);
-                }
-                const g = graphicsMap.get(body.id);
-                if (g) {
-                    g.position.set(body.position.x, body.position.y);
-                    g.rotation = body.angle;
-                }
+            if (bike && bikeContainer) {
+                bikeContainer.position.set(bike.position.x, bike.position.y);
+                bikeContainer.rotation = bike.angle;
             }
-            
-            // Camera follows the bike
-            if (bike && bike.parts.chassis) {
-                const bikeX = bike.parts.chassis.position.x;
-                app.stage.pivot.x = bikeX;
-                app.stage.position.x = app.screen.width / 2;
+            if (bike) {
+                worldContainer.pivot.x = bike.position.x;
+                worldContainer.pivot.y = bike.position.y;
+                worldContainer.position.x = app.screen.width / 2;
+                worldContainer.position.y = app.screen.height / 2;
             }
         }
 
-        // --- Main Game Loop ---
-        function gameLoop() {
+        // --- Decoupled Game Loop ---
+        function updateGameLogic() {
+            if (isPaused) return;
             handleControls();
-            Engine.update(engine);
-            updateLegMechanics();
+            applyBalancingTorque();
+            applyWeightShift();
+        }
+        
+        (function renderLoop(){
             updatePixiGraphics();
-            requestAnimationFrame(gameLoop);
+            requestAnimationFrame(renderLoop);
+        }());
+
+        // --- Tuning Menu Logic ---
+        function setupTuningMenu() {
+            const menu = document.getElementById('tuningMenu');
+            const sliders = {
+                maxThrottle: document.getElementById('maxThrottle'),
+                kineticFriction: document.getElementById('kineticFriction'),
+                balanceStrength: document.getElementById('balanceStrength'),
+                weightShift: document.getElementById('weightShift')
+            };
+            const values = {
+                maxThrottle: document.getElementById('maxThrottleValue'),
+                kineticFriction: document.getElementById('kineticFrictionValue'),
+                balanceStrength: document.getElementById('balanceStrengthValue'),
+                weightShift: document.getElementById('weightShiftValue')
+            };
+
+            sliders.maxThrottle.value = maxThrottle;
+            sliders.kineticFriction.value = kineticFriction;
+            sliders.balanceStrength.value = balanceStrength;
+            sliders.weightShift.value = weightShiftStrength;
+
+            sliders.maxThrottle.addEventListener('input', (e) => {
+                maxThrottle = parseFloat(e.target.value);
+                values.maxThrottle.textContent = maxThrottle.toFixed(4);
+            });
+            sliders.kineticFriction.addEventListener('input', (e) => {
+                kineticFriction = parseFloat(e.target.value);
+                values.kineticFriction.textContent = kineticFriction.toFixed(2);
+            });
+            sliders.balanceStrength.addEventListener('input', (e) => {
+                balanceStrength = parseFloat(e.target.value);
+                values.balanceStrength.textContent = balanceStrength.toExponential(1);
+            });
+            sliders.weightShift.addEventListener('input', (e) => {
+                weightShiftStrength = parseFloat(e.target.value);
+                values.weightShift.textContent = weightShiftStrength.toFixed(4);
+            });
+
+            window.addEventListener('keydown', (e) => {
+                if (e.key.toLowerCase() === 'p') {
+                    isPaused = !isPaused;
+                    menu.style.display = isPaused ? 'block' : 'none';
+                }
+            });
         }
 
         // --- Initialization ---
         function init() {
-            createGround();
-            createRiderAndBike(200, window.innerHeight * 0.7);
-
-            // Keyboard event listeners
-            window.addEventListener('keydown', (e) => { keys[e.key] = true; });
-            window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+            const spawnX = 200;
+            const spawnY = createGround(spawnX);
             
-            // Adjust camera pivot for initial view
-            app.stage.pivot.y = window.innerHeight / 2;
-            app.stage.position.y = app.screen.height / 2;
+            createBackgroundStars();
+            createRigidBike(spawnX, spawnY - 50);
+            createPixiBikeContainer();
+            setupTuningMenu();
 
-            gameLoop();
+            window.addEventListener('keydown', (e) => { 
+                if (e.key.toLowerCase() !== 'p') {
+                    keys[e.key] = true; 
+                }
+            });
+            window.addEventListener('keyup', (e) => { 
+                if (e.key.toLowerCase() !== 'p') {
+                    keys[e.key] = false; 
+                }
+            });
+            
+            if (bike) {
+                worldContainer.pivot.x = bike.position.x;
+                worldContainer.pivot.y = bike.position.y;
+                worldContainer.position.x = app.screen.width / 2;
+                worldContainer.position.y = app.screen.height / 2;
+            }
+
+            runner = Runner.create();
+            Events.on(runner, 'beforeUpdate', updateGameLogic);
+            Runner.run(runner, engine);
         }
 
         init();
