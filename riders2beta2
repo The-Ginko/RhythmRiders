@@ -2308,11 +2308,13 @@
             // Create one main container for the entire bike
             bikeContainer = new PIXI.Container();
             const allBodies = Composite.allBodies(bike.composite);
-            const compositeBounds = Composite.bounds(bike.composite);
-            const compositeCenter = { 
-                x: (compositeBounds.min.x + compositeBounds.max.x) / 2,
-                y: (compositeBounds.min.y + compositeBounds.max.y) / 2
-            };
+            
+            // We need a reference point for all parts. The chassis is a good choice.
+            const chassis = bike.chassis;
+            if (!chassis) {
+                console.error("Chassis not found in bike composite.");
+                return;
+            }
 
             allBodies.forEach(part => {
                 const g = new PIXI.Graphics();
@@ -2330,11 +2332,10 @@
                 g.drawPolygon(relativeVertices);
                 g.endFill();
 
-                // Position the graphic PART relative to the COMPOSITE'S center
-                g.position.set(part.position.x - compositeCenter.x, part.position.y - compositeCenter.y);
-                g.rotation = part.angle;
-
-                // Store the graphic on the body for updates and add it to the single bike container
+                // Position the graphic PART relative to the CHASSIS's starting position
+                g.position.set(part.position.x - chassis.position.x, part.position.y - chassis.position.y);
+                
+                // Store the graphic on the body itself for later updates
                 part.pixiGraphics = g;
                 bikeContainer.addChild(g);
             });
@@ -2347,17 +2348,19 @@
         function updatePixiGraphics() {
             if (bike && bike.composite && bikeContainer) {
                 const allBodies = Composite.allBodies(bike.composite);
-                const chassis = bike.chassis; // Main body to follow
+                const chassis = bike.chassis; 
 
-                // Update the position and rotation of the single parent container
+                // Update the position and rotation of the single parent container to match the chassis
                 bikeContainer.position.set(chassis.position.x, chassis.position.y);
                 bikeContainer.rotation = chassis.angle;
 
-                // Update the rotation of the individual parts INSIDE the container
+                // Update the rotation and relative position of the individual parts INSIDE the container
                 allBodies.forEach(part => {
                     if (part.pixiGraphics && part !== chassis) {
-                         // The position is now handled by the parent container.
-                         // We only need to sync the angle of individual parts relative to the main chassis.
+                        // The child parts' positions are relative to the parent container
+                        const relativePosition = Vector.sub(part.position, chassis.position);
+                        const rotatedPosition = Vector.rotate(relativePosition, -chassis.angle);
+                        part.pixiGraphics.position.set(rotatedPosition.x, rotatedPosition.y);
                         part.pixiGraphics.rotation = part.angle - chassis.angle;
                     }
                 });
