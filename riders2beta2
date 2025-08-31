@@ -1,0 +1,2459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rhythm Riders - Suspension Test</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0c0c1e;
+            color: #e0e0e0;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        canvas {
+            display: block;
+            background-color: #1a1a2e;
+        }
+        .ui-panel {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 25px;
+            border-radius: 10px;
+            border: 1px solid #ff00ff;
+            box-shadow: 0 0 15px #ff00ff;
+            text-align: center;
+        }
+        .controls {
+            top: 20px;
+        }
+        .tuning-menu {
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            display: none; /* Hidden by default */
+        }
+        .tuning-menu h2 {
+            margin: 0 0 15px 0;
+            color: #00ffff;
+        }
+        .tuning-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .tuning-row label {
+            flex-basis: 40%;
+            text-align: left;
+        }
+        .tuning-row input {
+            flex-basis: 50%;
+        }
+        .tuning-row span {
+            flex-basis: 10%;
+            text-align: right;
+            font-weight: bold;
+            color: #ffff00;
+        }
+    </style>
+</head>
+<body>
+    <div class="ui-panel controls">
+        <h1>Rhythm Riders - Suspension Vehicle</h1>
+        <p><span>W</span> / <span>Up</span> - Accelerate | <span>S</span> / <span>Down</span> - Brake/Reverse</p>
+        <p><span>A</span> / <span>Left</span> - Lean Back | <span>D</span> / <span>Right</span> - Lean Forward | <span>P</span> - Pause/Tune</p>
+    </div>
+
+    <div id="tuningMenu" class="ui-panel tuning-menu">
+        <h2>Tuning Menu (Paused)</h2>
+        <div class="tuning-row">
+            <label for="maxThrottle">Max Throttle:</label>
+            <input type="range" id="maxThrottle" min="0.01" max="0.5" step="0.01">
+            <span id="maxThrottleValue">0.2</span>
+        </div>
+        <div class="tuning-row">
+            <label for="kineticFriction">Kinetic Friction:</label>
+            <input type="range" id="kineticFriction" min="0.1" max="2.0" step="0.1">
+            <span id="kineticFrictionValue">0.8</span>
+        </div>
+         <div class="tuning-row">
+            <label for="balanceStrength">Balance Strength:</label>
+            <input type="range" id="balanceStrength" min="0" max="0.0005" step="0.00001">
+            <span id="balanceStrengthValue">0.0001</span>
+        </div>
+        <div class="tuning-row">
+            <label for="weightShift">Weight Shift:</label>
+            <input type="range" id="weightShift" min="0" max="0.1" step="0.001">
+            <span id="weightShiftValue">0.02</span>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.0/pixi.min.js"></script>
+    <script src="./libs/matter-tools.js"></script>
+    <script>
+        // --- Setup ---
+        const {
+            Engine, World, Bodies, Body, Composite, Vector, Query, Events, Runner, Constraint
+        } = Matter;
+
+        // --- PIXI Setup ---
+        const app = new PIXI.Application({
+            width: window.innerWidth,
+            height: window.innerHeight,
+            backgroundColor: 0x1a1a2e,
+            resizeTo: window,
+            antialias: true,
+        });
+        document.body.appendChild(app.view);
+
+        const worldContainer = new PIXI.Container();
+        app.stage.addChild(worldContainer);
+
+        // --- Matter.js Engine Setup ---
+        const engine = Engine.create();
+        const world = engine.world;
+        engine.gravity.y = 1;
+        
+        engine.positionIterations = 20;
+        engine.velocityIterations = 16;
+
+        const groundBodies = []; 
+
+        // --- Game State & Controls ---
+        const keys = {};
+        let bike;
+        let bikeContainer; 
+        let isAirborne = false;
+        let isPaused = false;
+        let runner; 
+        
+        let currentThrottle = 0;
+        const throttleRampUp = 0.005;
+
+        // --- Tunable Physics Variables ---
+        let maxThrottle = 0.2;
+        let kineticFriction = 0.8;
+        let balanceStrength = 0.0001;
+        let weightShiftStrength = 0.02;
+
+        const staticFriction = 1.5;
+        let isBurningOut = false;
+        const serializer = MatterTools.Serializer.create();
+
+        // --- Background Stars ---
+        function createBackgroundStars() {
+            const starContainer = new PIXI.Container();
+            for (let i = 0; i < 200; i++) {
+                const star = new PIXI.Graphics();
+                star.beginFill(0xffffff, Math.random() * 0.8 + 0.2);
+                star.drawCircle(0, 0, Math.random() * 1.5 + 0.5);
+                star.endFill();
+                star.x = (Math.random() - 0.5) * 4000;
+                star.y = (Math.random() - 0.5) * 2000;
+                starContainer.addChild(star);
+            }
+            worldContainer.addChildAt(starContainer, 0);
+        }
+
+        // --- Ground & Track Creation ---
+        function createGround(spawnX) {
+            let currentX = -2000;
+            let currentY = window.innerHeight * 0.9;
+            const roadThickness = 10;
+            let spawnY = 0;
+
+            for (let i = 0; i < 100; i++) {
+                const segmentLength = 200 + Math.random() * 100;
+                const heightChange = (Math.random() - 0.5) * 200;
+                const nextX = currentX + segmentLength;
+                const nextY = currentY + heightChange;
+
+                if (spawnX >= currentX && spawnX < nextX) {
+                    const slope = (nextY - currentY) / (nextX - currentX);
+                    spawnY = currentY + (spawnX - currentX) * slope;
+                }
+
+                const angle = Math.atan2(nextY - currentY, nextX - currentX);
+                const length = Math.sqrt(Math.pow(nextX - currentX, 2) + Math.pow(nextY - currentY, 2));
+                
+                const centerX = currentX + (nextX - currentX) / 2;
+                const centerY = currentY + (nextY - currentY) / 2;
+
+                const groundSegment = Bodies.rectangle(centerX, centerY, length, roadThickness, {
+                    isStatic: true,
+                    angle: angle,
+                    friction: 1.0,
+                    restitution: 0
+                });
+                
+                World.add(world, groundSegment);
+                groundBodies.push(groundSegment);
+                
+                const g = new PIXI.Graphics();
+                g.beginFill(0x0c0c1e);
+                g.lineStyle(4, 0x00ffff, 1);
+                g.drawRect(-length / 2, -roadThickness / 2, length, roadThickness);
+                g.endFill();
+                g.position.set(centerX, centerY);
+                g.rotation = angle;
+                worldContainer.addChild(g);
+                
+                currentX = nextX;
+                currentY = nextY;
+            }
+            return spawnY;
+        }
+
+        function createSuspensionBike(x, y) {
+            const vehicleJson = `[
+  {
+    "id": 18,
+    "type": "composite",
+    "parent": {
+      "$": 1
+    },
+    "isModified": false,
+    "bodies": {
+      "$": 202
+    },
+    "constraints": {
+      "$": 203
+    },
+    "composites": {
+      "$": 204
+    },
+    "label": "Composite 1",
+    "plugin": {
+      "$": 205
+    },
+    "cache": {
+      "$": 206
+    },
+    "angle": 2.548
+  },
+  {
+    "id": 9,
+    "type": "composite",
+    "parent": {
+      "$": 2
+    },
+    "isModified": false,
+    "bodies": {
+      "$": 194
+    },
+    "constraints": {
+      "$": 195
+    },
+    "composites": {
+      "$": 196
+    },
+    "label": "Master Composite",
+    "plugin": {
+      "$": 197
+    },
+    "cache": {
+      "$": 198
+    }
+  },
+  {
+    "id": 0,
+    "type": "composite",
+    "parent": null,
+    "isModified": false,
+    "bodies": {
+      "$": 3
+    },
+    "constraints": {
+      "$": 4
+    },
+    "composites": {
+      "$": 5
+    },
+    "label": "World",
+    "plugin": {
+      "$": 6
+    },
+    "cache": {
+      "$": 7
+    },
+    "gravity": {
+      "$": 193
+    }
+  },
+  [],
+  [],
+  [
+    {
+      "$": 1
+    }
+  ],
+  {},
+  {
+    "allBodies": {
+      "$": 8
+    },
+    "allConstraints": {
+      "$": 167
+    },
+    "allComposites": null
+  },
+  [
+    {
+      "$": 9
+    },
+    {
+      "$": 32
+    },
+    {
+      "$": 55
+    },
+    {
+      "$": 111
+    }
+  ],
+  {
+    "id": 10,
+    "type": "body",
+    "label": "Rectangle Body",
+    "parts": {
+      "$": 10
+    },
+    "plugin": {
+      "$": 11
+    },
+    "angle": 1.846,
+    "vertices": {
+      "$": 12
+    },
+    "position": {
+      "$": 17
+    },
+    "force": {
+      "$": 18
+    },
+    "torque": 0,
+    "positionImpulse": {
+      "$": 19
+    },
+    "constraintImpulse": {
+      "$": 20
+    },
+    "totalContacts": 0,
+    "speed": 0.001,
+    "angularSpeed": 0.000011209561009417612,
+    "velocity": {
+      "$": 21
+    },
+    "angularVelocity": -0.000011209561009417612,
+    "isSensor": false,
+    "isStatic": false,
+    "isSleeping": false,
+    "motion": 0,
+    "sleepThreshold": 60,
+    "density": 0.001,
+    "restitution": 0,
+    "friction": 0.1,
+    "frictionStatic": 0.5,
+    "frictionAir": 0.01,
+    "collisionFilter": {
+      "$": 22
+    },
+    "slop": 0.05,
+    "timeScale": 1,
+    "render": {
+      "$": 23
+    },
+    "events": null,
+    "bounds": {
+      "$": 25
+    },
+    "chamfer": null,
+    "circleRadius": 0,
+    "positionPrev": {
+      "$": 28
+    },
+    "anglePrev": 1.846,
+    "parent": {
+      "$": 9
+    },
+    "axes": {
+      "$": 29
+    },
+    "area": 23110.981,
+    "mass": 23.111,
+    "inertia": 1938801.377,
+    "deltaTime": 16.667,
+    "_original": null,
+    "inverseInertia": 5.157825921869712e-7,
+    "inverseMass": 0.043,
+    "sleepCounter": 0
+  },
+  [
+    {
+      "$": 9
+    }
+  ],
+  {},
+  [
+    {
+      "$": 13
+    },
+    {
+      "$": 14
+    },
+    {
+      "$": 15
+    },
+    {
+      "$": 16
+    }
+  ],
+  {
+    "x": 1228.834,
+    "y": 549.598,
+    "index": 0,
+    "body": {
+      "$": 9
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1215.594,
+    "y": 593.932,
+    "index": 1,
+    "body": {
+      "$": 9
+    },
+    "isInternal": false
+  },
+  {
+    "x": 735.304,
+    "y": 456.626,
+    "index": 2,
+    "body": {
+      "$": 9
+    },
+    "isInternal": false
+  },
+  {
+    "x": 748.543,
+    "y": 412.293,
+    "index": 3,
+    "body": {
+      "$": 9
+    },
+    "isInternal": false
+  },
+  {
+    "x": 982.069,
+    "y": 503.113
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": -7.990913399892e-7,
+    "y": -0.00013133050426431537,
+    "angle": -6.386631552664224e-10
+  },
+  {
+    "x": -0.000290173534835958,
+    "y": 0.001
+  },
+  {
+    "group": -1,
+    "category": 1,
+    "mask": 4294967295
+  },
+  {
+    "visible": true,
+    "opacity": 1,
+    "strokeStyle": "#0F9D58",
+    "fillStyle": "#DB4437",
+    "lineWidth": 4,
+    "sprite": {
+      "$": 24
+    }
+  },
+  {
+    "xScale": 1,
+    "yScale": 1,
+    "xOffset": 0.5,
+    "yOffset": 0.5
+  },
+  {
+    "min": {
+      "$": 26
+    },
+    "max": {
+      "$": 27
+    }
+  },
+  {
+    "x": 735.303,
+    "y": 412.293
+  },
+  {
+    "x": 1228.834,
+    "y": 593.932
+  },
+  {
+    "x": 982.069,
+    "y": 503.112
+  },
+  [
+    {
+      "$": 30
+    },
+    {
+      "$": 31
+    }
+  ],
+  {
+    "x": -0.959,
+    "y": -0.286
+  },
+  {
+    "x": 0.275,
+    "y": -0.961
+  },
+  {
+    "id": 11,
+    "type": "body",
+    "label": "Rectangle Body",
+    "parts": {
+      "$": 33
+    },
+    "plugin": {
+      "$": 34
+    },
+    "angle": 1.236,
+    "vertices": {
+      "$": 35
+    },
+    "position": {
+      "$": 40
+    },
+    "force": {
+      "$": 41
+    },
+    "torque": 0,
+    "positionImpulse": {
+      "$": 42
+    },
+    "constraintImpulse": {
+      "$": 43
+    },
+    "totalContacts": 0,
+    "speed": 0.001,
+    "angularSpeed": 0.000011209561009639657,
+    "velocity": {
+      "$": 44
+    },
+    "angularVelocity": -0.000011209561009639657,
+    "isSensor": false,
+    "isStatic": false,
+    "isSleeping": false,
+    "motion": 0,
+    "sleepThreshold": 60,
+    "density": 0.001,
+    "restitution": 0,
+    "friction": 0.1,
+    "frictionStatic": 0.5,
+    "frictionAir": 0.01,
+    "collisionFilter": {
+      "$": 45
+    },
+    "slop": 0.05,
+    "timeScale": 1,
+    "render": {
+      "$": 46
+    },
+    "events": null,
+    "bounds": {
+      "$": 48
+    },
+    "chamfer": null,
+    "circleRadius": 0,
+    "positionPrev": {
+      "$": 51
+    },
+    "anglePrev": 1.236,
+    "parent": {
+      "$": 32
+    },
+    "axes": {
+      "$": 52
+    },
+    "area": 22825.565,
+    "mass": 22.826,
+    "inertia": 1915914.444,
+    "deltaTime": 16.667,
+    "_original": null,
+    "inverseInertia": 5.21943974601526e-7,
+    "inverseMass": 0.044,
+    "sleepCounter": 0
+  },
+  [
+    {
+      "$": 32
+    }
+  ],
+  {},
+  [
+    {
+      "$": 36
+    },
+    {
+      "$": 37
+    },
+    {
+      "$": 38
+    },
+    {
+      "$": 39
+    }
+  ],
+  {
+    "x": 1210.939,
+    "y": 399.862,
+    "index": 0,
+    "body": {
+      "$": 32
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1225.483,
+    "y": 443.163,
+    "index": 1,
+    "body": {
+      "$": 32
+    },
+    "isInternal": false
+  },
+  {
+    "x": 753.187,
+    "y": 606.445,
+    "index": 2,
+    "body": {
+      "$": 32
+    },
+    "isInternal": false
+  },
+  {
+    "x": 738.642,
+    "y": 563.144,
+    "index": 3,
+    "body": {
+      "$": 32
+    },
+    "isInternal": false
+  },
+  {
+    "x": 982.063,
+    "y": 503.154
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 1.8510713341341086e-7,
+    "y": 0.0001375840809377478,
+    "angle": -5.56516742496165e-9
+  },
+  {
+    "x": -0.00029266845274378284,
+    "y": -0.001
+  },
+  {
+    "group": -1,
+    "category": 1,
+    "mask": 4294967295
+  },
+  {
+    "visible": true,
+    "opacity": 1,
+    "strokeStyle": "#0F9D58",
+    "fillStyle": "#a7d337",
+    "lineWidth": 4,
+    "sprite": {
+      "$": 47
+    }
+  },
+  {
+    "xScale": 1,
+    "yScale": 1,
+    "xOffset": 0.5,
+    "yOffset": 0.5
+  },
+  {
+    "min": {
+      "$": 49
+    },
+    "max": {
+      "$": 50
+    }
+  },
+  {
+    "x": 738.642,
+    "y": 399.861
+  },
+  {
+    "x": 1225.483,
+    "y": 606.445
+  },
+  {
+    "x": 982.063,
+    "y": 503.155
+  },
+  [
+    {
+      "$": 53
+    },
+    {
+      "$": 54
+    }
+  ],
+  {
+    "x": -0.948,
+    "y": 0.318
+  },
+  {
+    "x": -0.327,
+    "y": -0.945
+  },
+  {
+    "id": 12,
+    "type": "body",
+    "label": "Circle Body",
+    "parts": {
+      "$": 56
+    },
+    "plugin": {
+      "$": 57
+    },
+    "angle": -3.449,
+    "vertices": {
+      "$": 58
+    },
+    "position": {
+      "$": 85
+    },
+    "force": {
+      "$": 86
+    },
+    "torque": 0,
+    "positionImpulse": {
+      "$": 87
+    },
+    "constraintImpulse": {
+      "$": 88
+    },
+    "totalContacts": 0,
+    "speed": 0.003,
+    "angularSpeed": 2.1760371282653068e-14,
+    "velocity": {
+      "$": 89
+    },
+    "angularVelocity": 2.1760371282653068e-14,
+    "isSensor": false,
+    "isStatic": false,
+    "isSleeping": false,
+    "motion": 0,
+    "sleepThreshold": 60,
+    "density": 0.001,
+    "restitution": 0,
+    "friction": 0.1,
+    "frictionStatic": 0.5,
+    "frictionAir": 0.01,
+    "collisionFilter": {
+      "$": 90
+    },
+    "slop": 0.05,
+    "timeScale": 1,
+    "render": {
+      "$": 91
+    },
+    "events": null,
+    "bounds": {
+      "$": 93
+    },
+    "chamfer": null,
+    "circleRadius": 65,
+    "positionPrev": {
+      "$": 96
+    },
+    "anglePrev": -3.449,
+    "parent": {
+      "$": 55
+    },
+    "axes": {
+      "$": 97
+    },
+    "area": 13144.37,
+    "mass": 13.144,
+    "inertia": 109993.74,
+    "deltaTime": 16.667,
+    "_original": null,
+    "inverseInertia": 0.00000909142651469729,
+    "inverseMass": 0.076,
+    "sleepCounter": 0
+  },
+  [
+    {
+      "$": 55
+    }
+  ],
+  {},
+  [
+    {
+      "$": 59
+    },
+    {
+      "$": 60
+    },
+    {
+      "$": 61
+    },
+    {
+      "$": 62
+    },
+    {
+      "$": 63
+    },
+    {
+      "$": 64
+    },
+    {
+      "$": 65
+    },
+    {
+      "$": 66
+    },
+    {
+      "$": 67
+    },
+    {
+      "$": 68
+    },
+    {
+      "$": 69
+    },
+    {
+      "$": 70
+    },
+    {
+      "$": 71
+    },
+    {
+      "$": 72
+    },
+    {
+      "$": 73
+    },
+    {
+      "$": 74
+    },
+    {
+      "$": 75
+    },
+    {
+      "$": 76
+    },
+    {
+      "$": 77
+    },
+    {
+      "$": 78
+    },
+    {
+      "$": 79
+    },
+    {
+      "$": 80
+    },
+    {
+      "$": 81
+    },
+    {
+      "$": 82
+    },
+    {
+      "$": 83
+    },
+    {
+      "$": 84
+    }
+  ],
+  {
+    "x": 703.083,
+    "y": 592.336,
+    "index": 0,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 702.058,
+    "y": 576.7,
+    "index": 1,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 704.802,
+    "y": 561.274,
+    "index": 2,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 711.161,
+    "y": 546.952,
+    "index": 3,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 720.761,
+    "y": 534.567,
+    "index": 4,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 733.049,
+    "y": 524.841,
+    "index": 5,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 747.304,
+    "y": 518.336,
+    "index": 6,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 762.701,
+    "y": 515.435,
+    "index": 7,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 778.348,
+    "y": 516.299,
+    "index": 8,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 793.332,
+    "y": 520.886,
+    "index": 9,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 806.784,
+    "y": 528.923,
+    "index": 10,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 817.918,
+    "y": 539.948,
+    "index": 11,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 826.093,
+    "y": 553.316,
+    "index": 12,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 830.832,
+    "y": 568.252,
+    "index": 13,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 831.857,
+    "y": 583.888,
+    "index": 14,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 829.113,
+    "y": 599.315,
+    "index": 15,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 822.754,
+    "y": 613.636,
+    "index": 16,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 813.154,
+    "y": 626.022,
+    "index": 17,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 800.866,
+    "y": 635.747,
+    "index": 18,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 786.611,
+    "y": 642.252,
+    "index": 19,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 771.213,
+    "y": 645.154,
+    "index": 20,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 755.567,
+    "y": 644.289,
+    "index": 21,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 740.583,
+    "y": 639.702,
+    "index": 22,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 727.131,
+    "y": 631.665,
+    "index": 23,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 715.996,
+    "y": 620.64,
+    "index": 24,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 707.822,
+    "y": 607.273,
+    "index": 25,
+    "body": {
+      "$": 55
+    },
+    "isInternal": false
+  },
+  {
+    "x": 766.957,
+    "y": 580.294
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 4.649970755818276e-7,
+    "y": -0.000005063124535704122,
+    "angle": 0
+  },
+  {
+    "x": 0.001,
+    "y": 0.003
+  },
+  {
+    "group": -1,
+    "category": 1,
+    "mask": 4294967295
+  },
+  {
+    "visible": true,
+    "opacity": 1,
+    "strokeStyle": "#0F9D58",
+    "fillStyle": "#4285F4",
+    "lineWidth": 4,
+    "sprite": {
+      "$": 92
+    }
+  },
+  {
+    "xScale": 1,
+    "yScale": 1,
+    "xOffset": 0.5,
+    "yOffset": 0.5
+  },
+  {
+    "min": {
+      "$": 94
+    },
+    "max": {
+      "$": 95
+    }
+  },
+  {
+    "x": 702.058,
+    "y": 515.435
+  },
+  {
+    "x": 831.857,
+    "y": 645.156
+  },
+  {
+    "x": 766.957,
+    "y": 580.292
+  },
+  [
+    {
+      "$": 98
+    },
+    {
+      "$": 99
+    },
+    {
+      "$": 100
+    },
+    {
+      "$": 101
+    },
+    {
+      "$": 102
+    },
+    {
+      "$": 103
+    },
+    {
+      "$": 104
+    },
+    {
+      "$": 105
+    },
+    {
+      "$": 106
+    },
+    {
+      "$": 107
+    },
+    {
+      "$": 108
+    },
+    {
+      "$": 109
+    },
+    {
+      "$": 110
+    }
+  ],
+  {
+    "x": 0.998,
+    "y": -0.065
+  },
+  {
+    "x": 0.985,
+    "y": 0.175
+  },
+  {
+    "x": 0.914,
+    "y": 0.406
+  },
+  {
+    "x": 0.79,
+    "y": 0.612
+  },
+  {
+    "x": 0.621,
+    "y": 0.784
+  },
+  {
+    "x": 0.415,
+    "y": 0.91
+  },
+  {
+    "x": 0.185,
+    "y": 0.982
+  },
+  {
+    "x": -0.055,
+    "y": 0.999
+  },
+  {
+    "x": -0.293,
+    "y": 0.956
+  },
+  {
+    "x": -0.513,
+    "y": 0.859
+  },
+  {
+    "x": -0.704,
+    "y": 0.711
+  },
+  {
+    "x": -0.853,
+    "y": 0.522
+  },
+  {
+    "x": -0.953,
+    "y": 0.302
+  },
+  {
+    "id": 13,
+    "type": "body",
+    "label": "Circle Body",
+    "parts": {
+      "$": 112
+    },
+    "plugin": {
+      "$": 113
+    },
+    "angle": -4.396,
+    "vertices": {
+      "$": 114
+    },
+    "position": {
+      "$": 141
+    },
+    "force": {
+      "$": 142
+    },
+    "torque": 0,
+    "positionImpulse": {
+      "$": 143
+    },
+    "constraintImpulse": {
+      "$": 144
+    },
+    "totalContacts": 0,
+    "speed": 0.003,
+    "angularSpeed": 4.3520742565306136e-14,
+    "velocity": {
+      "$": 145
+    },
+    "angularVelocity": -4.3520742565306136e-14,
+    "isSensor": false,
+    "isStatic": false,
+    "isSleeping": false,
+    "motion": 0,
+    "sleepThreshold": 60,
+    "density": 0.001,
+    "restitution": 0,
+    "friction": 0.1,
+    "frictionStatic": 0.5,
+    "frictionAir": 0.01,
+    "collisionFilter": {
+      "$": 146
+    },
+    "slop": 0.05,
+    "timeScale": 1,
+    "render": {
+      "$": 147
+    },
+    "events": null,
+    "bounds": {
+      "$": 149
+    },
+    "chamfer": null,
+    "circleRadius": 65,
+    "positionPrev": {
+      "$": 152
+    },
+    "anglePrev": -4.396,
+    "parent": {
+      "$": 111
+    },
+    "axes": {
+      "$": 153
+    },
+    "area": 13144.37,
+    "mass": 13.144,
+    "inertia": 109993.74,
+    "deltaTime": 16.667,
+    "_original": null,
+    "inverseInertia": 0.0000090914265146987,
+    "inverseMass": 0.076,
+    "sleepCounter": 0
+  },
+  [
+    {
+      "$": 111
+    }
+  ],
+  {},
+  [
+    {
+      "$": 115
+    },
+    {
+      "$": 116
+    },
+    {
+      "$": 117
+    },
+    {
+      "$": 118
+    },
+    {
+      "$": 119
+    },
+    {
+      "$": 120
+    },
+    {
+      "$": 121
+    },
+    {
+      "$": 122
+    },
+    {
+      "$": 123
+    },
+    {
+      "$": 124
+    },
+    {
+      "$": 125
+    },
+    {
+      "$": 126
+    },
+    {
+      "$": 127
+    },
+    {
+      "$": 128
+    },
+    {
+      "$": 129
+    },
+    {
+      "$": 130
+    },
+    {
+      "$": 131
+    },
+    {
+      "$": 132
+    },
+    {
+      "$": 133
+    },
+    {
+      "$": 134
+    },
+    {
+      "$": 135
+    },
+    {
+      "$": 136
+    },
+    {
+      "$": 137
+    },
+    {
+      "$": 138
+    },
+    {
+      "$": 139
+    },
+    {
+      "$": 140
+    }
+  ],
+  {
+    "x": 1169.923,
+    "y": 626.852,
+    "index": 0,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1156.632,
+    "y": 618.553,
+    "index": 1,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1145.71,
+    "y": 607.316,
+    "index": 2,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1137.798,
+    "y": 593.791,
+    "index": 3,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1133.352,
+    "y": 578.765,
+    "index": 4,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1132.632,
+    "y": 563.11,
+    "index": 5,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1135.677,
+    "y": 547.74,
+    "index": 6,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1142.313,
+    "y": 533.546,
+    "index": 7,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1152.153,
+    "y": 521.349,
+    "index": 8,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1164.627,
+    "y": 511.864,
+    "index": 9,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1179.006,
+    "y": 505.639,
+    "index": 10,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1194.458,
+    "y": 503.039,
+    "index": 11,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1210.084,
+    "y": 504.209,
+    "index": 12,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1224.976,
+    "y": 509.085,
+    "index": 13,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1238.267,
+    "y": 517.384,
+    "index": 14,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1249.188,
+    "y": 528.621,
+    "index": 15,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1257.1,
+    "y": 542.147,
+    "index": 16,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1261.547,
+    "y": 557.172,
+    "index": 17,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1262.266,
+    "y": 572.827,
+    "index": 18,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1259.222,
+    "y": 588.197,
+    "index": 19,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1252.586,
+    "y": 602.391,
+    "index": 20,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1242.746,
+    "y": 614.588,
+    "index": 21,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1230.272,
+    "y": 624.073,
+    "index": 22,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1215.892,
+    "y": 630.299,
+    "index": 23,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1200.44,
+    "y": 632.899,
+    "index": 24,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1184.814,
+    "y": 631.728,
+    "index": 25,
+    "body": {
+      "$": 111
+    },
+    "isInternal": false
+  },
+  {
+    "x": 1197.449,
+    "y": 567.969
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 0,
+    "y": -1e-323
+  },
+  {
+    "x": 6.27619905881577e-7,
+    "y": -4.630753822079087e-7,
+    "angle": 0
+  },
+  {
+    "x": 0.0004389787948184676,
+    "y": -0.003
+  },
+  {
+    "group": -1,
+    "category": 1,
+    "mask": 4294967295
+  },
+  {
+    "visible": true,
+    "opacity": 1,
+    "strokeStyle": "#0F9D58",
+    "fillStyle": "#7a414b",
+    "lineWidth": 4,
+    "sprite": {
+      "$": 148
+    }
+  },
+  {
+    "xScale": 1,
+    "yScale": 1,
+    "xOffset": 0.5,
+    "yOffset": 0.5
+  },
+  {
+    "min": {
+      "$": 150
+    },
+    "max": {
+      "$": 151
+    }
+  },
+  {
+    "x": 1132.632,
+    "y": 503.036
+  },
+  {
+    "x": 1262.267,
+    "y": 632.899
+  },
+  {
+    "x": 1197.449,
+    "y": 567.971
+  },
+  [
+    {
+      "$": 154
+    },
+    {
+      "$": 155
+    },
+    {
+      "$": 156
+    },
+    {
+      "$": 157
+    },
+    {
+      "$": 158
+    },
+    {
+      "$": 159
+    },
+    {
+      "$": 160
+    },
+    {
+      "$": 161
+    },
+    {
+      "$": 162
+    },
+    {
+      "$": 163
+    },
+    {
+      "$": 164
+    },
+    {
+      "$": 165
+    },
+    {
+      "$": 166
+    }
+  ],
+  {
+    "x": 0.529,
+    "y": -0.848
+  },
+  {
+    "x": 0.717,
+    "y": -0.697
+  },
+  {
+    "x": 0.863,
+    "y": -0.505
+  },
+  {
+    "x": 0.958,
+    "y": -0.284
+  },
+  {
+    "x": 0.999,
+    "y": -0.046
+  },
+  {
+    "x": 0.981,
+    "y": 0.194
+  },
+  {
+    "x": 0.906,
+    "y": 0.424
+  },
+  {
+    "x": 0.779,
+    "y": 0.628
+  },
+  {
+    "x": 0.605,
+    "y": 0.796
+  },
+  {
+    "x": 0.397,
+    "y": 0.918
+  },
+  {
+    "x": 0.166,
+    "y": 0.986
+  },
+  {
+    "x": -0.074,
+    "y": 0.997
+  },
+  {
+    "x": -0.311,
+    "y": 0.95
+  },
+  [
+    {
+      "$": 168
+    },
+    {
+      "$": 173
+    },
+    {
+      "$": 178
+    },
+    {
+      "$": 183
+    },
+    {
+      "$": 188
+    }
+  ],
+  {
+    "bodyA": {
+      "$": 32
+    },
+    "bodyB": {
+      "$": 9
+    },
+    "pointA": {
+      "$": 169
+    },
+    "pointB": {
+      "$": 170
+    },
+    "stiffness": 0.01,
+    "damping": 0.1,
+    "length": 92,
+    "render": {
+      "$": 171
+    },
+    "id": 14,
+    "label": "Constraint",
+    "type": "constraint",
+    "angularStiffness": 0,
+    "angleA": 1.236,
+    "angleB": 1.846,
+    "plugin": {
+      "$": 172
+    }
+  },
+  {
+    "x": 161.454,
+    "y": -50.634
+  },
+  {
+    "x": 135.806,
+    "y": 38.293
+  },
+  {
+    "visible": true,
+    "lineWidth": 4,
+    "strokeStyle": "#0F9D58",
+    "type": "spring",
+    "anchors": true
+  },
+  {},
+  {
+    "bodyA": {
+      "$": 9
+    },
+    "bodyB": {
+      "$": 32
+    },
+    "pointA": {
+      "$": 174
+    },
+    "pointB": {
+      "$": 175
+    },
+    "stiffness": 0.01,
+    "damping": 0.05,
+    "length": 109,
+    "render": {
+      "$": 176
+    },
+    "id": 15,
+    "label": "Constraint",
+    "type": "constraint",
+    "angularStiffness": 0,
+    "angleA": 1.846,
+    "angleB": 1.236,
+    "plugin": {
+      "$": 177
+    }
+  },
+  {
+    "x": -238.859,
+    "y": -48.771
+  },
+  {
+    "x": -229.767,
+    "y": 59.495
+  },
+  {
+    "visible": true,
+    "lineWidth": 4,
+    "strokeStyle": "#0F9D58",
+    "type": "spring",
+    "anchors": true
+  },
+  {},
+  {
+    "bodyA": {
+      "$": 111
+    },
+    "bodyB": {
+      "$": 9
+    },
+    "pointA": {
+      "$": 179
+    },
+    "pointB": {
+      "$": 180
+    },
+    "stiffness": 0.15,
+    "damping": 0.05,
+    "length": 0,
+    "render": {
+      "$": 181
+    },
+    "id": 16,
+    "label": "Constraint",
+    "type": "constraint",
+    "angularStiffness": 0,
+    "angleA": -4.396,
+    "angleB": 1.846,
+    "plugin": {
+      "$": 182
+    }
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 215.38,
+    "y": 64.86
+  },
+  {
+    "visible": true,
+    "lineWidth": 4,
+    "strokeStyle": "#0F9D58",
+    "type": "spring",
+    "anchors": true
+  },
+  {},
+  {
+    "bodyA": {
+      "$": 55
+    },
+    "bodyB": {
+      "$": 32
+    },
+    "pointA": {
+      "$": 184
+    },
+    "pointB": {
+      "$": 185
+    },
+    "stiffness": 0.1,
+    "damping": 0.05,
+    "length": 0,
+    "render": {
+      "$": 186
+    },
+    "id": 17,
+    "label": "Constraint",
+    "type": "constraint",
+    "angularStiffness": 0,
+    "angleA": -3.449,
+    "angleB": 1.236,
+    "plugin": {
+      "$": 187
+    }
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": -215.105,
+    "y": 77.137
+  },
+  {
+    "visible": true,
+    "lineWidth": 4,
+    "strokeStyle": "#0F9D58",
+    "type": "spring",
+    "anchors": true
+  },
+  {},
+  {
+    "bodyA": {
+      "$": 32
+    },
+    "bodyB": {
+      "$": 9
+    },
+    "pointA": {
+      "$": 189
+    },
+    "pointB": {
+      "$": 190
+    },
+    "stiffness": 0.16,
+    "damping": 0.05,
+    "length": 0,
+    "render": {
+      "$": 191
+    },
+    "id": 18,
+    "label": "Constraint",
+    "type": "constraint",
+    "angularStiffness": 0,
+    "angleA": 1.236,
+    "angleB": 1.846,
+    "plugin": {
+      "$": 192
+    }
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "x": 0,
+    "y": 0
+  },
+  {
+    "visible": true,
+    "lineWidth": 4,
+    "strokeStyle": "#0F9D58",
+    "type": "spring",
+    "anchors": true
+  },
+  {},
+  {
+    "x": 0,
+    "y": 0,
+    "scale": 0.001
+  },
+  [],
+  [],
+  [
+    {
+      "$": 0
+    }
+  ],
+  {},
+  {
+    "allBodies": {
+      "$": 199
+    },
+    "allConstraints": {
+      "$": 200
+    },
+    "allComposites": {
+      "$": 201
+    }
+  },
+  [
+    {
+      "$": 9
+    },
+    {
+      "$": 32
+    },
+    {
+      "$": 55
+    },
+    {
+      "$": 111
+    }
+  ],
+  [
+    {
+      "$": 168
+    },
+    {
+      "$": 173
+    },
+    {
+      "$": 178
+    },
+    {
+      "$": 183
+    },
+    {
+      "$": 188
+    }
+  ],
+  [
+    {
+      "$": 0
+    }
+  ],
+  [
+    {
+      "$": 9
+    },
+    {
+      "$": 32
+    },
+    {
+      "$": 55
+    },
+    {
+      "$": 111
+    }
+  ],
+  [
+    {
+      "$": 168
+    },
+    {
+      "$": 173
+    },
+    {
+      "$": 178
+    },
+    {
+      "$": 183
+    },
+    {
+      "$": 188
+    }
+  ],
+  [],
+  {},
+  {
+    "allBodies": {
+      "$": 207
+    },
+    "allConstraints": {
+      "$": 208
+    },
+    "allComposites": {
+      "$": 209
+    }
+  },
+  [
+    {
+      "$": 9
+    },
+    {
+      "$": 32
+    },
+    {
+      "$": 55
+    },
+    {
+      "$": 111
+    }
+  ],
+  [
+    {
+      "$": 168
+    },
+    {
+      "$": 173
+    },
+    {
+      "$": 178
+    },
+    {
+      "$": 183
+    },
+    {
+      "$": 188
+    }
+  ],
+  []
+]`;
+           
+            const bikeComposite = serializer.parse(vehicleJson);
+            
+            if (!bikeComposite || !bikeComposite.bodies) {
+                console.error("Failed to parse a valid composite from the JSON.");
+                return null;
+            }
+
+            Composite.allBodies(bikeComposite).forEach(body => {
+                Body.set(body, 'collisionFilter', { 
+                    group: body.collisionFilter.group,
+                    category: body.collisionFilter.category,
+                    mask: body.collisionFilter.mask
+                });
+            });
+
+            const bounds = Composite.bounds(bikeComposite);
+            const center = { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 };
+            const translation = { x: x - center.x, y: y - center.y - 50 };
+            Composite.translate(bikeComposite, translation);
+
+            World.add(world, bikeComposite);
+            
+            return {
+                composite: bikeComposite,
+                chassis: Composite.get(bikeComposite, 2, 'body'),
+                rearWheel: Composite.get(bikeComposite, 1, 'body')
+            };
+        }
+
+        function applyBalancingTorque() {
+            if (!bike || !bike.chassis || isAirborne) return;
+
+            const chassis = bike.chassis;
+            const targetAngle = 0;
+            const currentAngle = chassis.angle;
+            const normalizedAngle = ((currentAngle % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+            const angleDifference = targetAngle - normalizedAngle;
+            chassis.torque += angleDifference * balanceStrength * chassis.inertia;
+        }
+
+        function applyWeightShift() {
+        }
+
+        function handleControls() {
+            if (!bike || !bike.chassis || !bike.rearWheel) return;
+
+            const rearContacts = Query.collides(bike.rearWheel, groundBodies);
+            isAirborne = rearContacts.length === 0;
+
+            if (keys['w'] || keys['ArrowUp']) {
+                currentThrottle = Math.min(maxThrottle, currentThrottle + throttleRampUp);
+            } else {
+                currentThrottle = Math.max(0, currentThrottle - throttleRampUp * 2);
+            }
+
+            if (rearContacts.length > 0) {
+                 if (keys['w'] || keys['ArrowUp']) {
+                    bike.rearWheel.torque = currentThrottle * 10;
+                 }
+                 if (keys['s'] || keys['ArrowDown']) {
+                    bike.rearWheel.torque = -maxThrottle * 5;
+                 }
+            }
+            
+            if (isAirborne) {
+                if (keys['a'] || keys['ArrowLeft']) {
+                    bike.chassis.torque = -weightShiftStrength * bike.chassis.inertia * 0.1;
+                }
+                if (keys['d'] || keys['ArrowRight']) {
+                    bike.chassis.torque = weightShiftStrength * bike.chassis.inertia * 0.1;
+                }
+            }
+        }
+
+        // --- PIXI Rendering Logic ---
+        // --- PIXI Rendering Logic ---
+        function createPixiBikeContainer() {
+            if (!bike || !bike.composite) return;
+
+            // Create one main container for the entire bike
+            bikeContainer = new PIXI.Container();
+            const allBodies = Composite.allBodies(bike.composite);
+            const compositeBounds = Composite.bounds(bike.composite);
+            const compositeCenter = { 
+                x: (compositeBounds.min.x + compositeBounds.max.x) / 2,
+                y: (compositeBounds.min.y + compositeBounds.max.y) / 2
+            };
+
+            allBodies.forEach(part => {
+                const g = new PIXI.Graphics();
+                const fillColor = parseInt(part.render.fillStyle.substring(1), 16);
+                const lineColor = parseInt(part.render.strokeStyle.substring(1), 16);
+                const lineWidth = part.render.lineWidth || 2;
+
+                g.beginFill(fillColor, 0.9);
+                g.lineStyle(lineWidth, lineColor, 1);
+
+                // Draw each part's vertices relative to ITS OWN center
+                const relativeVertices = part.vertices.map(v => {
+                    return { x: v.x - part.position.x, y: v.y - part.position.y };
+                });
+                g.drawPolygon(relativeVertices);
+                g.endFill();
+
+                // Position the graphic PART relative to the COMPOSITE'S center
+                g.position.set(part.position.x - compositeCenter.x, part.position.y - compositeCenter.y);
+                g.rotation = part.angle;
+
+                // Store the graphic on the body for updates and add it to the single bike container
+                part.pixiGraphics = g;
+                bikeContainer.addChild(g);
+            });
+
+            // Add the single, fully assembled bike container to the world
+            worldContainer.addChild(bikeContainer);
+        }
+
+        // --- Camera Logic ---
+        function updatePixiGraphics() {
+            if (bike && bike.composite && bikeContainer) {
+                const allBodies = Composite.allBodies(bike.composite);
+                const chassis = bike.chassis; // Main body to follow
+
+                // Update the position and rotation of the single parent container
+                bikeContainer.position.set(chassis.position.x, chassis.position.y);
+                bikeContainer.rotation = chassis.angle;
+
+                // Update the rotation of the individual parts INSIDE the container
+                allBodies.forEach(part => {
+                    if (part.pixiGraphics && part !== chassis) {
+                         // The position is now handled by the parent container.
+                         // We only need to sync the angle of individual parts relative to the main chassis.
+                        part.pixiGraphics.rotation = part.angle - chassis.angle;
+                    }
+                });
+
+                // Camera follows the bike container (which is positioned at the chassis)
+                if (chassis) {
+                    worldContainer.pivot.x = chassis.position.x;
+                    worldContainer.pivot.y = chassis.position.y;
+                    worldContainer.position.x = app.screen.width / 2;
+                    worldContainer.position.y = app.screen.height / 2;
+                }
+            }
+        }
+
+        function updateGameLogic() {
+            if (isPaused) return;
+            handleControls();
+            applyBalancingTorque();
+        }
+        
+        (function renderLoop(){
+            updatePixiGraphics();
+            requestAnimationFrame(renderLoop);
+        }());
+
+        function setupTuningMenu() {
+            const menu = document.getElementById('tuningMenu');
+            const sliders = {
+                maxThrottle: document.getElementById('maxThrottle'),
+                kineticFriction: document.getElementById('kineticFriction'),
+                balanceStrength: document.getElementById('balanceStrength'),
+                weightShift: document.getElementById('weightShift')
+            };
+            const values = {
+                maxThrottle: document.getElementById('maxThrottleValue'),
+                kineticFriction: document.getElementById('kineticFrictionValue'),
+                balanceStrength: document.getElementById('balanceStrengthValue'),
+                weightShift: document.getElementById('weightShiftValue')
+            };
+
+            sliders.maxThrottle.value = maxThrottle;
+            sliders.kineticFriction.value = kineticFriction;
+            sliders.balanceStrength.value = balanceStrength;
+            sliders.weightShift.value = weightShiftStrength;
+
+            sliders.maxThrottle.addEventListener('input', (e) => {
+                maxThrottle = parseFloat(e.target.value);
+                values.maxThrottle.textContent = maxThrottle.toFixed(2);
+            });
+            sliders.kineticFriction.addEventListener('input', (e) => {
+                kineticFriction = parseFloat(e.target.value);
+                values.kineticFriction.textContent = kineticFriction.toFixed(2);
+            });
+            sliders.balanceStrength.addEventListener('input', (e) => {
+                balanceStrength = parseFloat(e.target.value);
+                values.balanceStrength.textContent = balanceStrength.toExponential(1);
+            });
+             sliders.weightShift.addEventListener('input', (e) => {
+                weightShiftStrength = parseFloat(e.target.value);
+                values.weightShift.textContent = weightShiftStrength.toFixed(3);
+            });
+
+            window.addEventListener('keydown', (e) => {
+                if (e.key.toLowerCase() === 'p') {
+                    isPaused = !isPaused;
+                    menu.style.display = isPaused ? 'block' : 'none';
+                }
+            });
+        }
+
+        function init() {
+            const spawnX = 200;
+            const spawnY = createGround(spawnX);
+            
+            createBackgroundStars();
+            bike = createSuspensionBike(spawnX, spawnY);
+            createPixiBikeContainer();
+            setupTuningMenu();
+
+            window.addEventListener('keydown', (e) => { 
+                if (e.key.toLowerCase() !== 'p') {
+                    keys[e.key] = true; 
+                }
+            });
+            window.addEventListener('keyup', (e) => { 
+                if (e.key.toLowerCase() !== 'p') {
+                    keys[e.key] = false; 
+                }
+            });
+            
+            runner = Runner.create();
+            Events.on(runner, 'beforeUpdate', updateGameLogic);
+            Runner.run(runner, engine);
+        }
+
+        init();
+    </script>
+</body>
+</html>
