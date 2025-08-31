@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rhythm Riders - Suspension Test</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0c0c1e;
+            color: #e0e0e0;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        canvas {
+            display: block;
+            background-color: #1a1a2e;
+        }
+        .ui-panel {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px 25px;
+            border-radius: 10px;
+            border: 1px solid #ff00ff;
+            box-shadow: 0 0 15px #ff00ff;
+            text-align: center;
+        }
+        .controls {
+            top: 20px;
+        }
+        .tuning-menu {
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            display: none; /* Hidden by default */
+        }
+        .tuning-menu h2 {
+            margin: 0 0 15px 0;
+            color: #00ffff;
+        }
+        .tuning-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .tuning-row label {
+            flex-basis: 40%;
+            text-align: left;
+        }
+        .tuning-row input {
+            flex-basis: 50%;
+        }
+        .tuning-row span {
+            flex-basis: 10%;
+            text-align: right;
+            font-weight: bold;
+            color: #ffff00;
+        }
+    </style>
+</head>
+<body>
+    <div class="ui-panel controls">
+        <h1>Rhythm Riders - Suspension Vehicle</h1>
+        <p><span>W</span> / <span>Up</span> - Accelerate | <span>S</span> / <span>Down</span> - Brake/Reverse</p>
+        <p><span>A</span> / <span>Left</span> - Lean Back | <span>D</span> / <span>Right</span> - Lean Forward | <span>P</span> - Pause/Tune</p>
+    </div>
+
+    <div id="tuningMenu" class="ui-panel tuning-menu">
+        <h2>Tuning Menu (Paused)</h2>
+        <div class="tuning-row">
+            <label for="maxThrottle">Max Throttle:</label>
+            <input type="range" id="maxThrottle" min="0.01" max="0.5" step="0.01">
+            <span id="maxThrottleValue">0.2</span>
+        </div>
+        <div class="tuning-row">
+            <label for="kineticFriction">Kinetic Friction:</label>
+            <input type="range" id="kineticFriction" min="0.1" max="2.0" step="0.1">
+            <span id="kineticFrictionValue">0.8</span>
+        </div>
+         <div class="tuning-row">
+            <label for="balanceStrength">Balance Strength:</label>
+            <input type="range" id="balanceStrength" min="0" max="0.0005" step="0.00001">
+            <span id="balanceStrengthValue">0.0001</span>
+        </div>
+        <div class="tuning-row">
+            <label for="weightShift">Weight Shift:</label>
+            <input type="range" id="weightShift" min="0" max="0.1" step="0.001">
+            <span id="weightShiftValue">0.02</span>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.0/pixi.min.js"></script>
+    <script src="./libs/matter-tools.js"></script>
+    <script>
+        // --- Setup ---
+        const {
+            Engine, World, Bodies, Body, Composite, Vector, Query, Events, Runner
+        } = Matter;
+
+        // --- PIXI Setup ---
+        const app = new PIXI.Application({
+            width: window.innerWidth,
+            height: window.innerHeight,
+            backgroundColor: 0x1a1a2e,
+            resizeTo: window,
+            antialias: true,
+        });
+        document.body.appendChild(app.view);
+
+        const worldContainer = new PIXI.Container();
+        app.stage.addChild(worldContainer);
+
+        // --- Matter.js Engine Setup ---
+        const engine = Engine.create();
+        const world = engine.world;
+        engine.gravity.y = 1;
+        
+        engine.positionIterations = 20;
+        engine.velocityIterations = 16;
+
+        const groundBodies = []; 
+
+        // --- Game State & Controls ---
+        const keys = {};
+        let bike;
+        let bikeContainer; 
+        let isAirborne = false;
+        let isPaused = false;
+        let runner; 
+        
+        let currentThrottle = 0;
+        const throttleRampUp = 0.005;
+
+        // --- Tunable Physics Variables ---
+        let maxThrottle = 0.2;
+        let kineticFriction = 0.8;
+        let balanceStrength = 0.0001;
+        let weightShiftStrength = 0.02;
+
+        const staticFriction = 1.5;
+        let isBurningOut = false;
+        const serializer = MatterTools.Serializer.create();
+
+        // --- Background Stars ---
+        function createBackgroundStars() {
+            const starContainer = new PIXI.Container();
+            for (let i = 0; i < 200; i++) {
+                const star = new PIXI.Graphics();
+                star.beginFill(0xffffff, Math.random() * 0.8 + 0.2);
+                star.drawCircle(0, 0, Math.random() * 1.5 + 0.5);
+                star.endFill();
+                star.x = (Math.random() - 0.5) * 4000;
+                star.y = (Math.random() - 0.5) * 2000;
+                starContainer.addChild(star);
+            }
+            worldContainer.addChildAt(starContainer, 0);
+        }
+
+        // --- Ground & Track Creation ---
+        function createGround(spawnX) {
+            let currentX = -2000;
+            let currentY = window.innerHeight * 0.9;
+            const roadThickness = 10;
+            let spawnY = 0;
+
+            for (let i = 0; i < 100; i++) {
+                const segmentLength = 200 + Math.random() * 100;
+                const heightChange = (Math.random() - 0.5) * 200;
+                const nextX = currentX + segmentLength;
+                const nextY = currentY + heightChange;
+
+                if (spawnX >= currentX && spawnX < nextX) {
+                    const slope = (nextY - currentY) / (nextX - currentX);
+                    spawnY = currentY + (spawnX - currentX) * slope;
+                }
+
+                const angle = Math.atan2(nextY - currentY, nextX - currentX);
+                const length = Math.sqrt(Math.pow(nextX - currentX, 2) + Math.pow(nextY - currentY, 2));
+                
+                const centerX = currentX + (nextX - currentX) / 2;
+                const centerY = currentY + (nextY - currentY) / 2;
+
+                const groundSegment = Bodies.rectangle(centerX, centerY, length, roadThickness, {
+                    isStatic: true,
+                    angle: angle,
+                    friction: 1.0,
+                    restitution: 0
+                });
+                
+                World.add(world, groundSegment);
+                groundBodies.push(groundSegment);
+                
+                const g = new PIXI.Graphics();
+                g.beginFill(0x0c0c1e);
+                g.lineStyle(4, 0x00ffff, 1);
+                g.drawRect(-length / 2, -roadThickness / 2, length, roadThickness);
+                g.endFill();
+                g.position.set(centerX, centerY);
+                g.rotation = angle;
+                worldContainer.addChild(g);
+                
+                currentX = nextX;
+                currentY = nextY;
+            }
+            return spawnY;
+        }
+
+        function createSuspensionBike(x, y) {
+            const vehicleJson = `[ { "id": 18, "type": "composite", "parent": { "$": 1 }, "isModified": false, "bodies": { "$": 325 }, "constraints": { "$": 326 }, "composites": { "$": 327 }, "label": "Composite 1", "plugin": { "$": 328 }, "cache": { "$": 329 } }, { "id": 9, "type": "composite", "parent": { "$": 2 }, "isModified": false, "bodies": { "$": 317 }, "constraints": { "$": 318 }, "composites": { "$": 319 }, "label": "Master Composite", "plugin": { "$": 320 }, "cache": { "$": 321 } }, { "id": 0, "type": "composite", "parent": null, "isModified": false, "bodies": { "$": 3 }, "constraints": { "$": 123 }, "composites": { "$": 128 }, "label": "World", "plugin": { "$": 129 }, "cache": { "$": 130 }, "gravity": { "$": 316 } }, [ { "$": 4 }, { "$": 27 }, { "$": 51 }, { "$": 75 }, { "$": 99 } ], { "id": 3, "type": "body", "label": "Polygon Body", "parts": { "$": 5 }, "plugin": { "$": 6 }, "angle": -2.615, "vertices": { "$": 7 }, "position": { "$": 11 }, "force": { "$": 12 }, "torque": 0, "positionImpulse": { "$": 13 }, "constraintImpulse": { "$": 14 }, "totalContacts": 0, "speed": 0, "angularSpeed": 0, "velocity": { "$": 15 }, "angularVelocity": 0, "isSensor": false, "isStatic": false, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": 0.001, "restitution": 0, "friction": 0.1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 16 }, "slop": 0.05, "timeScale": 1, "render": { "$": 17 }, "events": null, "bounds": { "$": 19 }, "chamfer": null, "circleRadius": 0, "positionPrev": { "$": 22 }, "anglePrev": -2.615, "parent": { "$": 4 }, "axes": { "$": 23 }, "area": 1169.145, "mass": 1.169, "inertia": 1052.24, "deltaTime": 16.667, "_original": null, "inverseInertia": 0.001, "inverseMass": 0.855, "sleepCounter": 0 }, [ { "$": 4 } ], {}, [ { "$": 8 }, { "$": 9 }, { "$": 10 } ], { "x": 1157.134, "y": 847.963, "index": 0, "body": { "$": 4 }, "isInternal": false }, { "x": 1182.964, "y": 893.05, "index": 1, "body": { "$": 4 }, "isInternal": false }, { "x": 1131.002, "y": 892.876, "index": 2, "body": { "$": 4 }, "isInternal": false }, { "x": 1157.033, "y": 877.963 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0, "angle": 0 }, { "x": 0, "y": 0 }, { "category": 1, "mask": 4294967295, "group": 0 }, { "visible": true, "opacity": 1, "strokeStyle": "#999", "fillStyle": "#0F9D58", "lineWidth": 1, "sprite": { "$": 18 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.667, "yOffset": 0.5 }, { "min": { "$": 20 }, "max": { "$": 21 } }, { "x": 1131.002, "y": 847.963 }, { "x": 1182.964, "y": 893.325 }, { "x": 1157.033, "y": 877.963 }, [ { "$": 24 }, { "$": 25 }, { "$": 26 } ], { "x": 0.868, "y": -0.497 }, { "x": -0.003, "y": 1 }, { "x": -0.864, "y": -0.503 }, { "id": 4, "type": "body", "label": "Rectangle Body", "parts": { "$": 28 }, "plugin": { "$": 29 }, "angle": 0, "vertices": { "$": 30 }, "position": { "$": 35 }, "force": { "$": 36 }, "torque": 0, "positionImpulse": { "$": 37 }, "constraintImpulse": { "$": 38 }, "totalContacts": 0, "speed": 0, "angularSpeed": 0, "velocity": { "$": 39 }, "angularVelocity": 0, "isSensor": false, "isStatic": true, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": { "$.": "Number", "$v": [ "Infinity" ] }, "restitution": 0, "friction": 1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 40 }, "slop": 0.05, "timeScale": 1, "render": { "$": 41 }, "events": null, "bounds": { "$": 43 }, "chamfer": null, "circleRadius": 0, "positionPrev": { "$": 46 }, "anglePrev": 0, "parent": { "$": 27 }, "axes": { "$": 47 }, "area": 77280, "mass": { "$.": "Number", "$v": [ "Infinity" ] }, "inertia": { "$.": "Number", "$v": [ "Infinity" ] }, "deltaTime": 16.667, "_original": { "$": 50 }, "inverseInertia": 0, "inverseMass": 0, "sleepCounter": 0 }, [ { "$": 27 } ], {}, [ { "$": 31 }, { "$": 32 }, { "$": 33 }, { "$": 34 } ], { "x": 0, "y": 893, "index": 0, "body": { "$": 27 }, "isInternal": false }, { "x": 1288, "y": 893, "index": 1, "body": { "$": 27 }, "isInternal": false }, { "x": 1288, "y": 953, "index": 2, "body": { "$": 27 }, "isInternal": false }, { "x": 0, "y": 953, "index": 3, "body": { "$": 27 }, "isInternal": false }, { "x": 644, "y": 923 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0, "angle": 0 }, { "x": 0, "y": 0 }, { "category": 1, "mask": 4294967295, "group": 0 }, { "visible": true, "opacity": 1, "strokeStyle": "#999", "fillStyle": "#444", "lineWidth": 1, "sprite": { "$": 42 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 44 }, "max": { "$": 45 } }, { "x": 0, "y": 893 }, { "x": 1288, "y": 953 }, { "x": 644, "y": 923 }, [ { "$": 48 }, { "$": 49 } ], { "x": 0, "y": 1 }, { "x": -1, "y": 0 }, { "restitution": 0, "friction": 0.1, "mass": 77.28, "inertia": 42827133.44, "density": 0.001, "inverseMass": 0.013, "inverseInertia": 2.3349683242306677e-8 }, { "id": 5, "type": "body", "label": "Rectangle Body", "parts": { "$": 52 }, "plugin": { "$": 53 }, "angle": 0, "vertices": { "$": 54 }, "position": { "$": 59 }, "force": { "$": 60 }, "torque": 0, "positionImpulse": { "$": 61 }, "constraintImpulse": { "$": 62 }, "totalContacts": 0, "speed": 0, "angularSpeed": 0, "velocity": { "$": 63 }, "angularVelocity": 0, "isSensor": false, "isStatic": true, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": { "$.": "Number", "$v": [ "Infinity" ] }, "restitution": 0, "friction": 1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 64 }, "slop": 0.05, "timeScale": 1, "render": { "$": 65 }, "events": null, "bounds": { "$": 67 }, "chamfer": null, "circleRadius": 0, "positionPrev": { "$": 70 }, "anglePrev": 0, "parent": { "$": 51 }, "axes": { "$": 71 }, "area": 77280, "mass": { "$.": "Number", "$v": [ "Infinity" ] }, "inertia": { "$.": "Number", "$v": [ "Infinity" ] }, "deltaTime": 16.667, "_original": { "$": 74 }, "inverseInertia": 0, "inverseMass": 0, "sleepCounter": 0 }, [ { "$": 51 } ], {}, [ { "$": 55 }, { "$": 56 }, { "$": 57 }, { "$": 58 } ], { "x": 0, "y": 0, "index": 0, "body": { "$": 51 }, "isInternal": false }, { "x": 1288, "y": 0, "index": 1, "body": { "$": 51 }, "isInternal": false }, { "x": 1288, "y": 60, "index": 2, "body": { "$": 51 }, "isInternal": false }, { "x": 0, "y": 60, "index": 3, "body": { "$": 51 }, "isInternal": false }, { "x": 644, "y": 30 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0, "angle": 0 }, { "x": 0, "y": 0 }, { "category": 1, "mask": 4294967295, "group": 0 }, { "visible": true, "opacity": 1, "strokeStyle": "#999", "fillStyle": "#444", "lineWidth": 1, "sprite": { "$": 66 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 68 }, "max": { "$": 69 } }, { "x": 0, "y": 0 }, { "x": 1288, "y": 60 }, { "x": 644, "y": 30 }, [ { "$": 72 }, { "$": 73 } ], { "x": 0, "y": 1 }, { "x": -1, "y": 0 }, { "restitution": 0, "friction": 0.1, "mass": 77.28, "inertia": 42827133.44, "density": 0.001, "inverseMass": 0.013, "inverseInertia": 2.3349683242306677e-8 }, { "id": 6, "type": "body", "label": "Rectangle Body", "parts": { "$": 76 }, "plugin": { "$": 77 }, "angle": 0, "vertices": { "$": 78 }, "position": { "$": 83 }, "force": { "$": 84 }, "torque": 0, "positionImpulse": { "$": 85 }, "constraintImpulse": { "$": 86 }, "totalContacts": 0, "speed": 0, "angularSpeed": 0, "velocity": { "$": 87 }, "angularVelocity": 0, "isSensor": false, "isStatic": true, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": { "$.": "Number", "$v": [ "Infinity" ] }, "restitution": 0, "friction": 1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 88 }, "slop": 0.05, "timeScale": 1, "render": { "$": 89 }, "events": null, "bounds": { "$": 91 }, "chamfer": null, "circleRadius": 0, "positionPrev": { "$": 94 }, "anglePrev": 0, "parent": { "$": 75 }, "axes": { "$": 95 }, "area": 57180, "mass": { "$.": "Number", "$v": [ "Infinity" ] }, "inertia": { "$.": "Number", "$v": [ "Infinity" ] }, "deltaTime": 16.667, "_original": { "$": 98 }, "inverseInertia": 0, "inverseMass": 0, "sleepCounter": 0 }, [ { "$": 75 } ], {}, [ { "$": 79 }, { "$": 80 }, { "$": 81 }, { "$": 82 } ], { "x": 0, "y": 0, "index": 0, "body": { "$": 75 }, "isInternal": false }, { "x": 60, "y": 0, "index": 1, "body": { "$": 75 }, "isInternal": false }, { "x": 60, "y": 953, "index": 2, "body": { "$": 75 }, "isInternal": false }, { "x": 0, "y": 953, "index": 3, "body": { "$": 75 }, "isInternal": false }, { "x": 30, "y": 476.5 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0, "angle": 0 }, { "x": 0, "y": 0 }, { "category": 1, "mask": 4294967295, "group": 0 }, { "visible": true, "opacity": 1, "strokeStyle": "#999", "fillStyle": "#444", "lineWidth": 1, "sprite": { "$": 90 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 92 }, "max": { "$": 93 } }, { "x": 0, "y": 0 }, { "x": 60, "y": 953 }, { "x": 30, "y": 476.5 }, [ { "$": 96 }, { "$": 97 } ], { "x": 0, "y": 1 }, { "x": -1, "y": 0 }, { "restitution": 0, "friction": 0.1, "mass": 57.18, "inertia": 17379079.54, "density": 0.001, "inverseMass": 0.017, "inverseInertia": 5.7540446701931605e-8 }, { "id": 7, "type": "body", "label": "Rectangle Body", "parts": { "$": 100 }, "plugin": { "$": 101 }, "angle": 0, "vertices": { "$": 102 }, "position": { "$": 107 }, "force": { "$": 108 }, "torque": 0, "positionImpulse": { "$": 109 }, "constraintImpulse": { "$": 110 }, "totalContacts": 0, "speed": 0, "angularSpeed": 0, "velocity": { "$": 111 }, "angularVelocity": 0, "isSensor": false, "isStatic": true, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": { "$.": "Number", "$v": [ "Infinity" ] }, "restitution": 0, "friction": 1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 112 }, "slop": 0.05, "timeScale": 1, "render": { "$": 113 }, "events": null, "bounds": { "$": 115 }, "chamfer": null, "circleRadius": 0, "positionPrev": { "$": 118 }, "anglePrev": 0, "parent": { "$": 99 }, "axes": { "$": 119 }, "area": 57180, "mass": { "$.": "Number", "$v": [ "Infinity" ] }, "inertia": { "$.": "Number", "$v": [ "Infinity" ] }, "deltaTime": 16.667, "_original": { "$": 122 }, "inverseInertia": 0, "inverseMass": 0, "sleepCounter": 0 }, [ { "$": 99 } ], {}, [ { "$": 103 }, { "$": 104 }, { "$": 105 }, { "$": 106 } ], { "x": 1228, "y": 0, "index": 0, "body": { "$": 99 }, "isInternal": false }, { "x": 1288, "y": 0, "index": 1, "body": { "$": 99 }, "isInternal": false }, { "x": 1288, "y": 953, "index": 2, "body": { "$": 99 }, "isInternal": false }, { "x": 1228, "y": 953, "index": 3, "body": { "$": 99 }, "isInternal": false }, { "x": 1258, "y": 476.5 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0, "angle": 0 }, { "x": 0, "y": 0 }, { "category": 1, "mask": 4294967295, "group": 0 }, { "visible": true, "opacity": 1, "strokeStyle": "#999", "fillStyle": "#444", "lineWidth": 1, "sprite": { "$": 114 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 116 }, "max": { "$": 117 } }, { "x": 1228, "y": 0 }, { "x": 1288, "y": 953 }, { "x": 1258, "y": 476.5 }, [ { "$": 120 }, { "$": 121 } ], { "x": 0, "y": 1 }, { "x": -1, "y": 0 }, { "restitution": 0, "friction": 0.1, "mass": 57.18, "inertia": 17379079.54, "density": 0.001, "inverseMass": 0.017, "inverseInertia": 5.7540446701931605e-8 }, [ { "$": 124 } ], { "label": "Mouse Constraint", "pointA": { "$": 125 }, "pointB": null, "length": 0.01, "stiffness": 0.2, "angularStiffness": 1, "render": { "$": 126 }, "id": 8, "type": "constraint", "damping": 0, "angleA": { "$": -1 }, "angleB": 1.138, "plugin": { "$": 127 }, "bodyB": null }, { "x": 1037, "y": 355 }, { "visible": false, "lineWidth": 2, "strokeStyle": "#999", "type": "spring", "anchors": true }, {}, [ { "$": 1 } ], {}, { "allBodies": { "$": 131 }, "allConstraints": { "$": 290 }, "allComposites": null }, [ { "$": 4 }, { "$": 27 }, { "$": 51 }, { "$": 75 }, { "$": 99 }, { "$": 132 }, { "$": 155 }, { "$": 178 }, { "$": 234 } ], { "id": 2, "type": "body", "label": "Rectangle Body", "parts": { "$": 133 }, "plugin": { "$": 134 }, "angle": 1.96, "vertices": { "$": 135 }, "position": { "$": 140 }, "force": { "$": 141 }, "torque": 0, "positionImpulse": { "$": 142 }, "constraintImpulse": { "$": 143 }, "totalContacts": 0, "speed": 0.072, "angularSpeed": 6.84228060876535e-8, "velocity": { "$": 144 }, "angularVelocity": 6.84228060876535e-8, "isSensor": false, "isStatic": false, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": 0.001, "restitution": 0, "friction": 0.1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 145 }, "slop": 0.05, "timeScale": 1, "render": { "$": 146 }, "events": null, "bounds": { "$": 148 }, "chamfer": null, "circleRadius": 0, "positionPrev": { "$": 151 }, "anglePrev": 1.96, "parent": { "$": 132 }, "axes": { "$": 152 }, "area": 23110.981, "mass": 23.111, "inertia": 1938801.377, "deltaTime": 16.667, "_original": null, "inverseInertia": 5.157825921869712e-7, "inverseMass": 0.043, "sleepCounter": 0 }, [ { "$": 132 } ], {}, [ { "$": 136 }, { "$": 137 }, { "$": 138 }, { "$": 139 } ], { "x": 891.825, "y": 814.647, "index": 0, "body": { "$": 132 }, "isInternal": false }, { "x": 873.639, "y": 857.192, "index": 1, "body": { "$": 132 }, "isInternal": false }, { "x": 412.033, "y": 666.27, "index": 2, "body": { "$": 132 }, "isInternal": false }, { "x": 430.218, "y": 623.726, "index": 3, "body": { "$": 132 }, "isInternal": false }, { "x": 651.929, "y": 740.459 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0.000022038005012330054, "y": -0.074, "angle": -0.000016332625875182693 }, { "x": 0.00011565232568955253, "y": 0.072 }, { "category": 1, "mask": 4294967295, "group": -1 }, { "visible": true, "opacity": 1, "strokeStyle": "#0F9D58", "fillStyle": "#DB4437", "lineWidth": 4, "sprite": { "$": 147 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 149 }, "max": { "$": 150 } }, { "x": 412.033, "y": 623.726 }, { "x": 891.825, "y": 857.538 }, { "x": 651.929, "y": 740.387 }, [ { "$": 153 }, { "$": 154 } ], { "x": -0.92, "y": -0.393 }, { "x": 0.382, "y": -0.924 }, { "id": 10, "type": "body", "label": "Rectangle Body", "parts": { "$": 156 }, "plugin": { "$": 157 }, "angle": 1.189, "vertices": { "$": 158 }, "position": { "$": 163 }, "force": { "$": 164 }, "torque": 0, "positionImpulse": { "$": 165 }, "constraintImpulse": { "$": 166 }, "totalContacts": 0, "speed": 0.018, "angularSpeed": 8.033829668185888e-8, "velocity": { "$": 167 }, "angularVelocity": -8.033829668185888e-8, "isSensor": false, "isStatic": false, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": 0.001, "restitution": 0, "friction": 0.1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 168 }, "slop": 0.05, "timeScale": 1, "render": { "$": 169 }, "events": null, "bounds": { "$": 171 }, "chamfer": null, "circleRadius": 0, "positionPrev": { "$": 174 }, "anglePrev": 1.189, "parent": { "$": 155 }, "axes": { "$": 175 }, "area": 22825.565, "mass": 22.826, "inertia": 1915914.444, "deltaTime": 16.667, "_original": null, "inverseInertia": 5.21943974601526e-7, "inverseMass": 0.044, "sleepCounter": 0 }, [ { "$": 155 } ], {}, [ { "$": 159 }, { "$": 160 }, { "$": 161 }, { "$": 162 } ], { "x": 875.472, "y": 628.689, "index": 0, "body": { "$": 155 }, "isInternal": false }, { "x": 892.03, "y": 671.261, "index": 1, "body": { "$": 155 }, "isInternal": false }, { "x": 427.906, "y": 856.5, "index": 2, "body": { "$": 155 }, "isInternal": false }, { "x": 411.348, "y": 813.929, "index": 3, "body": { "$": 155 }, "isInternal": false }, { "x": 651.689, "y": 742.595 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0.000008899735722740776, "y": -0.057, "angle": 0.000012036121912849891 }, { "x": -0.00020746461336784705, "y": -0.018 }, { "category": 1, "mask": 4294967295, "group": -1 }, { "visible": true, "opacity": 1, "strokeStyle": "#F4B400", "fillStyle": "#a7d337", "lineWidth": 4, "sprite": { "$": 170 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 172 }, "max": { "$": 173 } }, { "x": 411.348, "y": 628.689 }, { "x": 892.03, "y": 856.757 }, { "x": 651.689, "y": 742.613 }, [ { "$": 176 }, { "$": 177 } ], { "x": -0.932, "y": 0.362 }, { "x": -0.371, "y": -0.929 }, { "id": 1, "type": "body", "label": "Circle Body", "parts": { "$": 179 }, "plugin": { "$": 180 }, "angle": -4.455, "vertices": { "$": 181 }, "position": { "$": 208 }, "force": { "$": 209 }, "torque": 0, "positionImpulse": { "$": 210 }, "constraintImpulse": { "$": 211 }, "totalContacts": 0, "speed": 0.0000467784091559691, "angularSpeed": 7.203461072080586e-7, "velocity": { "$": 212 }, "angularVelocity": -7.203461072080586e-7, "isSensor": false, "isStatic": false, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": 0.001, "restitution": 0, "friction": 0.1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 213 }, "slop": 0.05, "timeScale": 1, "render": { "$": 214 }, "events": null, "bounds": { "$": 216 }, "chamfer": null, "circleRadius": 65, "positionPrev": { "$": 219 }, "anglePrev": -4.455, "parent": { "$": 178 }, "axes": { "$": 220 }, "area": 13144.37, "mass": 13.144, "inertia": 109993.74, "deltaTime": 16.667, "_original": null, "inverseInertia": 0.00000909142651469729, "inverseMass": 0.076, "sleepCounter": 0 }, [ { "$": 178 } ], {}, [ { "$": 182 }, { "$": 183 }, { "$": 184 }, { "$": 185 }, { "$": 186 }, { "$": 187 }, { "$": 188 }, { "$": 189 }, { "$": 190 }, { "$": 191 }, { "$": 192 }, { "$": 193 }, { "$": 194 }, { "$": 195 }, { "$": 196 }, { "$": 197 }, { "$": 198 }, { "$": 199 }, { "$": 200 }, { "$": 201 }, { "$": 202 }, { "$": 203 }, { "$": 204 }, { "$": 205 }, { "$": 206 }, { "$": 207 } ], { "x": 416.411, "y": 889.097, "index": 0, "body": { "$": 178 }, "isInternal": false }, { "x": 402.653, "y": 881.597, "index": 1, "body": { "$": 178 }, "isInternal": false }, { "x": 391.088, "y": 871.025, "index": 2, "body": { "$": 178 }, "isInternal": false }, { "x": 382.391, "y": 857.99, "index": 3, "body": { "$": 178 }, "isInternal": false }, { "x": 377.064, "y": 843.253, "index": 4, "body": { "$": 178 }, "isInternal": false }, { "x": 375.422, "y": 827.668, "index": 5, "body": { "$": 178 }, "isInternal": false }, { "x": 377.554, "y": 812.145, "index": 6, "body": { "$": 178 }, "isInternal": false }, { "x": 383.341, "y": 797.584, "index": 7, "body": { "$": 178 }, "isInternal": false }, { "x": 392.443, "y": 784.828, "index": 8, "body": { "$": 178 }, "isInternal": false }, { "x": 404.335, "y": 774.623, "index": 9, "body": { "$": 178 }, "isInternal": false }, { "x": 418.322, "y": 767.559, "index": 10, "body": { "$": 178 }, "isInternal": false }, { "x": 433.594, "y": 764.051, "index": 11, "body": { "$": 178 }, "isInternal": false }, { "x": 449.261, "y": 764.297, "index": 12, "body": { "$": 178 }, "isInternal": false }, { "x": 464.415, "y": 768.285, "index": 13, "body": { "$": 178 }, "isInternal": false }, { "x": 478.173, "y": 775.785, "index": 14, "body": { "$": 178 }, "isInternal": false }, { "x": 489.738, "y": 786.357, "index": 15, "body": { "$": 178 }, "isInternal": false }, { "x": 498.435, "y": 799.392, "index": 16, "body": { "$": 178 }, "isInternal": false }, { "x": 503.762, "y": 814.129, "index": 17, "body": { "$": 178 }, "isInternal": false }, { "x": 505.404, "y": 829.714, "index": 18, "body": { "$": 178 }, "isInternal": false }, { "x": 503.272, "y": 845.237, "index": 19, "body": { "$": 178 }, "isInternal": false }, { "x": 497.485, "y": 859.798, "index": 20, "body": { "$": 178 }, "isInternal": false }, { "x": 488.383, "y": 872.554, "index": 21, "body": { "$": 178 }, "isInternal": false }, { "x": 476.491, "y": 882.759, "index": 22, "body": { "$": 178 }, "isInternal": false }, { "x": 462.504, "y": 889.823, "index": 23, "body": { "$": 178 }, "isInternal": false }, { "x": 447.232, "y": 893.331, "index": 24, "body": { "$": 178 }, "isInternal": false }, { "x": 431.565, "y": 893.085, "index": 25, "body": { "$": 178 }, "isInternal": false }, { "x": 440.413, "y": 828.691 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": 0.000054078348932172916, "y": 0.112, "angle": 0 }, { "x": -0.000046772794462413, "y": -7.24749156688631e-7 }, { "category": 1, "mask": 4294967295, "group": -1 }, { "visible": true, "opacity": 1, "strokeStyle": "#0F9D58", "fillStyle": "#4285F4", "lineWidth": 4, "sprite": { "$": 215 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 217 }, "max": { "$": 218 } }, { "x": 375.422, "y": 764.051 }, { "x": 505.404, "y": 893.606 }, { "x": 440.413, "y": 828.691 }, [ { "$": 221 }, { "$": 222 }, { "$": 223 }, { "$": 224 }, { "$": 225 }, { "$": 226 }, { "$": 227 }, { "$": 228 }, { "$": 229 }, { "$": 230 }, { "$": 231 }, { "$": 232 }, { "$": 233 } ], { "x": 0.479, "y": -0.878 }, { "x": 0.675, "y": -0.738 }, { "x": 0.832, "y": -0.555 }, { "x": 0.94, "y": -0.34 }, { "x": 0.994, "y": -0.105 }, { "x": 0.991, "y": 0.136 }, { "x": 0.929, "y": 0.369 }, { "x": 0.814, "y": 0.581 }, { "x": 0.651, "y": 0.759 }, { "x": 0.451, "y": 0.893 }, { "x": 0.224, "y": 0.975 }, { "x": -0.016, "y": 1 }, { "x": -0.255, "y": 0.967 }, { "id": 11, "type": "body", "label": "Circle Body", "parts": { "$": 235 }, "plugin": { "$": 236 }, "angle": -5.393, "vertices": { "$": 237 }, "position": { "$": 264 }, "force": { "$": 265 }, "torque": 0, "positionImpulse": { "$": 266 }, "constraintImpulse": { "$": 267 }, "totalContacts": 0, "speed": 0.00006080632260071197, "angularSpeed": 9.375185889837212e-7, "velocity": { "$": 268 }, "angularVelocity": -9.375185889837212e-7, "isSensor": false, "isStatic": false, "isSleeping": false, "motion": 0, "sleepThreshold": 60, "density": 0.001, "restitution": 0, "friction": 0.1, "frictionStatic": 0.5, "frictionAir": 0.01, "collisionFilter": { "$": 269 }, "slop": 0.05, "timeScale": 1, "render": { "$": 270 }, "events": null, "bounds": { "$": 272 }, "chamfer": null, "circleRadius": 65, "positionPrev": { "$": 275 }, "anglePrev": -5.393, "parent": { "$": 234 }, "axes": { "$": 276 }, "area": 13144.37, "mass": 13.144, "inertia": 109993.74, "deltaTime": 16.667, "_original": null, "inverseInertia": 0.0000090914265146987, "inverseMass": 0.076, "sleepCounter": 0 }, [ { "$": 234 } ], {}, [ { "$": 238 }, { "$": 239 }, { "$": 240 }, { "$": 241 }, { "$": 242 }, { "$": 243 }, { "$": 244 }, { "$": 245 }, { "$": 246 }, { "$": 247 }, { "$": 248 }, { "$": 249 }, { "$": 250 }, { "$": 251 }, { "$": 252 }, { "$": 253 }, { "$": 254 }, { "$": 255 }, { "$": 256 }, { "$": 257 }, { "$": 258 }, { "$": 259 }, { "$": 260 }, { "$": 261 }, { "$": 262 }, { "$": 263 } ], { "x": 892.983, "y": 883.625, "index": 0, "body": { "$": 234 }, "isInternal": false }, { "x": 878.796, "y": 890.278, "index": 1, "body": { "$": 234 }, "isInternal": false }, { "x": 863.43, "y": 893.346, "index": 2, "body": { "$": 234 }, "isInternal": false }, { "x": 847.776, "y": 892.644, "index": 3, "body": { "$": 234 }, "isInternal": false }, { "x": 832.744, "y": 888.217, "index": 4, "body": { "$": 234 }, "isInternal": false }, { "x": 819.208, "y": 880.319, "index": 5, "body": { "$": 234 }, "isInternal": false }, { "x": 807.956, "y": 869.415, "index": 6, "body": { "$": 234 }, "isInternal": false }, { "x": 799.642, "y": 856.134, "index": 7, "body": { "$": 234 }, "isInternal": false }, { "x": 794.745, "y": 841.248, "index": 8, "body": { "$": 234 }, "isInternal": false }, { "x": 793.555, "y": 825.623, "index": 9, "body": { "$": 234 }, "isInternal": false }, { "x": 796.137, "y": 810.168, "index": 10, "body": { "$": 234 }, "isInternal": false }, { "x": 802.346, "y": 795.781, "index": 11, "body": { "$": 234 }, "isInternal": false }, { "x": 811.815, "y": 783.296, "index": 12, "body": { "$": 234 }, "isInternal": false }, { "x": 823.997, "y": 773.44, "index": 13, "body": { "$": 234 }, "isInternal": false }, { "x": 838.184, "y": 766.787, "index": 14, "body": { "$": 234 }, "isInternal": false }, { "x": 853.55, "y": 763.72, "index": 15, "body": { "$": 234 }, "isInternal": false }, { "x": 869.204, "y": 764.422, "index": 16, "body": { "$": 234 }, "isInternal": false }, { "x": 884.236, "y": 768.848, "index": 17, "body": { "$": 234 }, "isInternal": false }, { "x": 897.771, "y": 776.746, "index": 18, "body": { "$": 234 }, "isInternal": false }, { "x": 909.023, "y": 787.65, "index": 19, "body": { "$": 234 }, "isInternal": false }, { "x": 917.338, "y": 800.931, "index": 20, "body": { "$": 234 }, "isInternal": false }, { "x": 922.235, "y": 815.817, "index": 21, "body": { "$": 234 }, "isInternal": false }, { "x": 923.425, "y": 831.443, "index": 22, "body": { "$": 234 }, "isInternal": false }, { "x": 920.843, "y": 846.898, "index": 23, "body": { "$": 234 }, "isInternal": false }, { "x": 914.634, "y": 861.285, "index": 24, "body": { "$": 234 }, "isInternal": false }, { "x": 905.165, "y": 873.77, "index": 25, "body": { "$": 234 }, "isInternal": false }, { "x": 858.49, "y": 828.533 }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "x": -0.00010828112953812898, "y": 0.118, "angle": 0 }, { "x": -0.00006074718578474858, "y": -0.0000026810981808012002 }, { "category": 1, "mask": 4294967295, "group": -1 }, { "visible": true, "opacity": 1, "strokeStyle": "#0F9D58", "fillStyle": "#7a414b", "lineWidth": 4, "sprite": { "$": 271 } }, { "xScale": 1, "yScale": 1, "xOffset": 0.5, "yOffset": 0.5 }, { "min": { "$": 273 }, "max": { "$": 274 } }, { "x": 793.555, "y": 763.72 }, { "x": 923.425, "y": 893.621 }, { "x": 858.49, "y": 828.533 }, [ { "$": 277 }, { "$": 278 }, { "$": 279 }, { "$": 280 }, { "$": 281 }, { "$": 282 }, { "$": 283 }, { "$": 284 }, { "$": 285 }, { "$": 286 }, { "$": 287 }, { "$": 288 }, { "$": 289 } ], { "x": -0.425, "y": -0.905 }, { "x": -0.196, "y": -0.981 }, { "x": 0.045, "y": -0.999 }, { "x": 0.282, "y": -0.959 }, { "x": 0.504, "y": -0.864 }, { "x": 0.696, "y": -0.718 }, { "x": 0.848, "y": -0.531 }, { "x": 0.95, "y": -0.313 }, { "x": 0.997, "y": -0.076 }, { "x": 0.986, "y": 0.165 }, { "x": 0.918, "y": 0.396 }, { "x": 0.797, "y": 0.604 }, { "x": 0.629, "y": 0.777 }, [ { "$": 124 }, { "$": 291 }, { "$": 296 }, { "$": 301 }, { "$": 306 }, { "$": 311 } ], { "bodyA": { "$": 155 }, "bodyB": { "$": 132 }, "pointA": { "$": 292 }, "pointB": { "$": 293 }, "stiffness": 0.01, "damping": 0.1, "length": 92, "render": { "$": 294 }, "id": 17, "label": "Constraint", "type": "constraint", "angularStiffness": 0, "angleA": 1.189, "angleB": 1.96, "plugin": { "$": 295 } }, { "x": 158.903, "y": -58.146 }, { "x": 130.583, "y": 53.457 }, { "visible": true, "lineWidth": 4, "strokeStyle": "#0F9D58", "type": "spring", "anchors": true }, {}, { "bodyA": { "$": 132 }, "bodyB": { "$": 155 }, "pointA": { "$": 297 }, "pointB": { "$": 298 }, "stiffness": 0.01, "damping": 0.05, "length": 169, "render": { "$": 299 }, "id": 16, "label": "Constraint", "type": "constraint", "angularStiffness": 0, "angleA": 1.96, "angleB": 1.19, "plugin": { "$": 300 } }, { "x": -231.781, "y": -75.563 }, { "x": -226.796, "y": 69.973 }, { "visible": true, "lineWidth": 4, "strokeStyle": "#0F9D58", "type": "spring", "anchors": true }, {}, { "bodyA": { "$": 234 }, "bodyB": { "$": 132 }, "pointA": { "$": 302 }, "pointB": { "$": 303 }, "stiffness": 0.15, "damping": 0.05, "length": 0, "render": { "$": 304 }, "id": 14, "label": "Constraint", "type": "constraint", "angularStiffness": 0, "angleA": -5.393, "angleB": 1.961, "plugin": { "$": 305 } }, { "x": 0, "y": 0 }, { "x": 206.539, "y": 89.089 }, { "visible": true, "lineWidth": 4, "strokeStyle": "#0F9D58", "type": "spring", "anchors": true }, {}, { "bodyA": { "$": 178 }, "bodyB": { "$": 155 }, "pointA": { "$": 307 }, "pointB": { "$": 308 }, "stiffness": 0.1, "damping": 0.05, "length": 0, "render": { "$": 309 }, "id": 13, "label": "Constraint", "type": "constraint", "angularStiffness": 0, "angleA": -4.455, "angleB": 1.189, "plugin": { "$": 310 } }, { "x": 0, "y": 0 }, { "x": -211.253, "y": 87.134 }, { "visible": true, "lineWidth": 4, "strokeStyle": "#0F9D58", "type": "spring", "anchors": true }, {}, { "bodyA": { "$": 155 }, "bodyB": { "$": 132 }, "pointA": { "$": 312 }, "pointB": { "$": 313 }, "stiffness": 0.16, "damping": 0.05, "length": 0, "render": { "$": 314 }, "id": 12, "label": "Constraint", "type": "constraint", "angularStiffness": 0, "angleA": 1.189, "angleB": 1.96, "plugin": { "$": 315 } }, { "x": 0, "y": 0 }, { "x": 0, "y": 0 }, { "visible": true, "lineWidth": 4, "strokeStyle": "#0F9D58", "type": "spring", "anchors": true }, {}, { "x": 0, "y": 0.99, "scale": 0.001 }, [], [], [ { "$": 0 } ], {}, { "allBodies": { "$": 322 }, "allConstraints": { "$": 323 }, "allComposites": { "$": 324 } }, [ { "$": 132 }, { "$": 155 }, { "$": 178 }, { "$": 234 } ], [ { "$": 291 }, { "$": 296 }, { "$": 301 }, { "$": 306 }, { "$": 311 } ], [ { "$": 0 } ], [ { "$": 132 }, { "$": 155 }, { "$": 178 }, { "$": 234 } ], [ { "$": 291 }, { "$": 296 }, { "$": 301 }, { "$": 306 }, { "$": 311 } ], [], {}, { "allBodies": { "$": 330 }, "allConstraints": { "$": 331 }, "allComposites": { "$": 332 } }, [ { "$": 132 }, { "$": 155 }, { "$": 178 }, { "$": 234 } ], [ { "$": 291 }, { "$": 296 }, { "$": 301 }, { "$": 306 }, { "$": 311 } ], [] ]`;
+            const bikeComposite = serializer.parse(vehicleJson);
+            
+
+            Composite.allBodies(bikeComposite).forEach(body => {
+                Body.set(body, 'collisionFilter', { 
+                    group: body.collisionFilter.group,
+                    category: body.collisionFilter.category,
+                    mask: body.collisionFilter.mask
+                });
+            });
+
+
+            const bounds = Composite.bounds(bikeComposite);
+            const center = { x: (bounds.min.x + bounds.max.x) / 2, y: (bounds.min.y + bounds.max.y) / 2 };
+            
+            const translation = { x: x - center.x, y: y - center.y - 50 };
+            Composite.translate(bikeComposite, translation);
+
+            Composite.add(world, bikeComposite);
+            
+            return bikeComposite;
+        }
+
+        // --- Self-Righting Torque ---
+        function applyBalancingTorque() {
+            if (!bike || isAirborne) return;
+            // Assuming the first rectangle body is the main chassis
+            const chassis = bike.bodies.find(body => body.label === 'Rectangle Body');
+            if (!chassis) return;
+
+            const targetAngle = 0;
+            const currentAngle = chassis.angle;
+            const normalizedAngle = ((currentAngle % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+            const angleDifference = targetAngle - normalizedAngle;
+            chassis.torque += angleDifference * balanceStrength * chassis.inertia;
+        }
+
+        // --- Rider Weight Shift Simulation ---
+        function applyWeightShift() {
+            // This function's logic might need to be re-evaluated for the new chassis
+            // For now, let's keep it disabled to ensure basic functionality first.
+        }
+
+        // --- Player Controls ---
+        function handleControls() {
+            if (!bike) return;
+
+            // Identify parts based on their properties/order in the composite
+            const chassisParts = bike.bodies.filter(body => body.label === 'Rectangle Body');
+            const wheels = bike.bodies.filter(body => body.label === 'Circle Body');
+            
+            if (chassisParts.length === 0 || wheels.length < 2) return;
+
+            // Assume the first rectangle is the main chassis for leaning
+            const chassis = chassisParts[0];
+            
+            // Distinguish wheels by their X position relative to the chassis
+            const rearWheel = wheels.sort((a,b) => a.position.x - b.position.x)[0];
+
+            const rearContacts = Query.collides(rearWheel, groundBodies);
+            isAirborne = rearContacts.length === 0;
+
+            if (keys['w'] || keys['ArrowUp']) {
+                currentThrottle = Math.min(maxThrottle, currentThrottle + throttleRampUp);
+            } else {
+                currentThrottle = Math.max(0, currentThrottle - throttleRampUp * 2);
+            }
+
+            if (rearContacts.length > 0 && currentThrottle > 0) {
+                 rearWheel.torque = currentThrottle * 10;
+            }
+
+            if (keys['s'] || keys['ArrowDown']) {
+                 rearWheel.torque = -currentThrottle * 5;
+            }
+            
+            // Apply leaning torque to the main chassis part
+            if (keys['a'] || keys['ArrowLeft']) {
+                chassis.torque = -weightShiftStrength * chassis.inertia * 0.1;
+            }
+            if (keys['d'] || keys['ArrowRight']) {
+                chassis.torque = weightShiftStrength * chassis.inertia * 0.1;
+            }
+        }
+
+        // --- PIXI Rendering Logic ---
+        function createPixiBikeContainer() {
+            bikeContainer = new PIXI.Container();
+            const allBodies = Composite.allBodies(bike);
+
+            allBodies.forEach(part => {
+                const g = new PIXI.Graphics();
+                // Use the color defined in the body's render property from the JSON
+                const fillColor = parseInt(part.render.fillStyle.substring(1), 16);
+                const lineColor = parseInt(part.render.strokeStyle.substring(1), 16);
+
+                g.beginFill(fillColor, 0.9);
+                g.lineStyle(part.render.lineWidth || 2, lineColor, 1);
+
+                // We need to clone vertices and translate them to be relative to the body's center
+                const relativeVertices = part.vertices.map(v => {
+                    return { x: v.x - part.position.x, y: v.y - part.position.y };
+                });
+
+                g.drawPolygon(relativeVertices);
+                g.endFill();
+
+                // Store the graphics object on the body itself for easy updates
+                part.pixiGraphics = g;
+                bikeContainer.addChild(g);
+            });
+
+            worldContainer.addChild(bikeContainer);
+        }
+
+        // --- Camera Logic ---
+        function updatePixiGraphics() {
+            if (bike) {
+                const allBodies = Composite.allBodies(bike);
+                allBodies.forEach(part => {
+                    if (part.pixiGraphics) {
+                        part.pixiGraphics.position.set(part.position.x, part.position.y);
+                        part.pixiGraphics.rotation = part.angle;
+                    }
+                });
+                
+                // Camera follows the first body (assumed to be the main chassis)
+                const chassis = bike.bodies[0];
+                if (chassis) {
+                    worldContainer.pivot.x = chassis.position.x;
+                    worldContainer.pivot.y = chassis.position.y;
+                    worldContainer.position.x = app.screen.width / 2;
+                    worldContainer.position.y = app.screen.height / 2;
+                }
+            }
+        }
+
+        // --- Decoupled Game Loop ---
+        function updateGameLogic() {
+            if (isPaused) return;
+            handleControls();
+            applyBalancingTorque();
+        }
+        
+        (function renderLoop(){
+            updatePixiGraphics();
+            requestAnimationFrame(renderLoop);
+        }());
+
+        // --- Tuning Menu Logic ---
+        function setupTuningMenu() {
+            const menu = document.getElementById('tuningMenu');
+            const sliders = {
+                maxThrottle: document.getElementById('maxThrottle'),
+                kineticFriction: document.getElementById('kineticFriction'),
+                balanceStrength: document.getElementById('balanceStrength'),
+                weightShift: document.getElementById('weightShift')
+            };
+            const values = {
+                maxThrottle: document.getElementById('maxThrottleValue'),
+                kineticFriction: document.getElementById('kineticFrictionValue'),
+                balanceStrength: document.getElementById('balanceStrengthValue'),
+                weightShift: document.getElementById('weightShiftValue')
+            };
+
+            sliders.maxThrottle.value = maxThrottle;
+            sliders.kineticFriction.value = kineticFriction;
+            sliders.balanceStrength.value = balanceStrength;
+            sliders.weightShift.value = weightShiftStrength;
+
+            sliders.maxThrottle.addEventListener('input', (e) => {
+                maxThrottle = parseFloat(e.target.value);
+                values.maxThrottle.textContent = maxThrottle.toFixed(2);
+            });
+            sliders.kineticFriction.addEventListener('input', (e) => {
+                kineticFriction = parseFloat(e.target.value);
+                values.kineticFriction.textContent = kineticFriction.toFixed(2);
+            });
+            sliders.balanceStrength.addEventListener('input', (e) => {
+                balanceStrength = parseFloat(e.target.value);
+                values.balanceStrength.textContent = balanceStrength.toExponential(1);
+            });
+             sliders.weightShift.addEventListener('input', (e) => {
+                weightShiftStrength = parseFloat(e.target.value);
+                values.weightShift.textContent = weightShiftStrength.toFixed(3);
+            });
+
+            window.addEventListener('keydown', (e) => {
+                if (e.key.toLowerCase() === 'p') {
+                    isPaused = !isPaused;
+                    menu.style.display = isPaused ? 'block' : 'none';
+                }
+            });
+        }
+
+        // --- Initialization ---
+        function init() {
+            const spawnX = 200;
+            const spawnY = createGround(spawnX);
+            
+            createBackgroundStars();
+            bike = createSuspensionBike(spawnX, spawnY);
+            createPixiBikeContainer();
+            setupTuningMenu();
+
+            window.addEventListener('keydown', (e) => { 
+                if (e.key.toLowerCase() !== 'p') {
+                    keys[e.key] = true; 
+                }
+            });
+            window.addEventListener('keyup', (e) => { 
+                if (e.key.toLowerCase() !== 'p') {
+                    keys[e.key] = false; 
+                }
+            });
+            
+            runner = Runner.create();
+            Events.on(runner, 'beforeUpdate', updateGameLogic);
+            Runner.run(runner, engine);
+        }
+
+        init();
+    </script>
+</body>
+</html>
